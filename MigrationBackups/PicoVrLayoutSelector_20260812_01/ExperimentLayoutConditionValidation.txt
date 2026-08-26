@@ -1,0 +1,7 @@
+Scene: Assets/Scenes/Preparation Experiment Scene_AStage.unity
+Surface: shelf (1)
+Surface bounds: Center: (5.34, 0.99, 5.39), Extents: (1.04, 0.02, 0.47)
+LOW	PASS	generated=4	registry=12	colliders=4	maxBottomError=0.00000
+MEDIUM	PASS	generated=8	registry=16	colliders=8	maxBottomError=0.00000
+HIGH	PASS	generated=10	registry=18	colliders=10	maxBottomError=0.00000
+CLEAR	PASS	generated=0	registry=8

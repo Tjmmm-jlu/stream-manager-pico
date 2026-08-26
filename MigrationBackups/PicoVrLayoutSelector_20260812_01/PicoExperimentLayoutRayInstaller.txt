@@ -1,0 +1,9 @@
+Scene: Assets/Scenes/Preparation Experiment Scene_AStage.unity
+Hand: PICO XR Origin/Camera Offset/HandRight
+Ray pose: PICO XR Origin/Camera Offset/HandRight/RayPose
+Hand source: PXR_Hand
+Selection: PXR_Hand.Pinch rising edge or right-controller trigger
+Ray length: 5 m
+Layout buttons: 4
+Fallback: collider object name maps to Low/Medium/High/Clear
+Existing grab system modified: false

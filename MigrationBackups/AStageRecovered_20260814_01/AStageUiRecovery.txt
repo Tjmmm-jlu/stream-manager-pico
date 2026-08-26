@@ -1,0 +1,4 @@
+Finished: 2026-08-14T13:34:01.2787091+08:00
+PICO official HandLeft/HandRight: installed
+VR layout selector: installed
+PICO right-hand layout ray: installed

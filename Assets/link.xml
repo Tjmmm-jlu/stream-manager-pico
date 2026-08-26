@@ -1,0 +1,5 @@
+<linker>
+  <assembly fullname="Unity.XR.Interaction.Toolkit">
+    <type fullname="UnityEngine.XR.Interaction.Toolkit.XRInteractionManager" preserve="all" />
+  </assembly>
+</linker>

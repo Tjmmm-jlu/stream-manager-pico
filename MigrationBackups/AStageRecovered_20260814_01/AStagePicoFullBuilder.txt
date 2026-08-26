@@ -1,0 +1,10 @@
+Started: 2026-08-14T13:35:10.1758787+08:00
+Finished: 2026-08-14T13:35:37.1314511+08:00
+Result: Succeeded
+Output: D:\unity project\stream manager pico\Builds\stream-manager-pico-astage-fixed.apk
+Scene: Assets/Scenes/Preparation Experiment Scene_AStage.unity
+Total size: 702540315
+Errors: 0
+Warnings: 17
+Build mode: full A-stage player rebuild (Scripts Only disabled)
+Build options: None

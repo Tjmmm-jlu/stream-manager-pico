@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1045 &1
+EditorBuildSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Scenes:
+  - enabled: 0
+    path: Assets/Scenes/scene1.unity
+    guid: bbbd83640a3db014a8fa95aad5177df9
+  - enabled: 0
+    path: Assets/3D Laboratory Environment with Appratus/Scenes/Laboratory Scene.unity
+    guid: 180389531e0a3d743a8764665c00fbae
+  - enabled: 1
+    path: Assets/Scenes/Preparation Experiment Scene.unity
+    guid: 911825a9d2f55264482b2b4d27a8a593
+  - enabled: 0
+    path: Assets/Scenes/Preparation Experiment Scene_AStage.unity
+    guid: 9b0fa5b51f224754dbfc3abdab5d3f74
+  m_configObjects:
+    Unity.XR.PXR.Settings: {fileID: 11400000, guid: ad74b5a1bfcd19647a7271263659ad9e, type: 2}
+    com.unity.input.settings: {fileID: 11400000, guid: 044a5b7e82530cf41b416e6069b6c67b, type: 2}
+    com.unity.renderstreaming.settings: {fileID: 11400000, guid: 0d3aeed5cf418314386a22f89109f26f, type: 2}
+    com.unity.xr.management.loader_settings: {fileID: 11400000, guid: 0ec4eb6af4e17a54e9b7f64a6b8705cc, type: 2}
+    com.unity.xr.openxr.settings4: {fileID: 11400000, guid: 8da286be4ec4bdd479b4ca4c628d93ac, type: 2}

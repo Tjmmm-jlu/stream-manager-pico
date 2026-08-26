@@ -1,0 +1,32 @@
+Scene: Assets/Scenes/Preparation Experiment Scene_AStage.unity
+Removed apparatus roots: 26
+Already absent: 0
+Remaining sequence targets: 8
+Remaining semantic objects: 8
+Verified structural roots: 26
+REMOVED	glass support (1)
+REMOVED	crucible_and_cover (1)
+REMOVED	Glass_Lab_test_tube (4)
+REMOVED	Glass_Lab_test_tube (5)
+REMOVED	Erlenmeyer_flask (2)
+REMOVED	Erlenmeyer_flask (3)
+REMOVED	Crucible_Tongs (1)
+REMOVED	glass support (4)
+REMOVED	glass support (2)
+REMOVED	Erlenmeyer_flask with water
+REMOVED	Glass_Lab_test_tube with liquid
+REMOVED	Glass_Lab_test_tube with liquid (1)
+REMOVED	Glass_Lab_test_tube with liquid (2)
+REMOVED	Glass_Lab_test_tube with liquid (3)
+REMOVED	Erlenmeyer_flask with water (1)
+REMOVED	crucible_and_cover (2)
+REMOVED	Glass_Lab_test_tube (7)
+REMOVED	Glass_Lab_test_tube (6)
+REMOVED	Glass_Lab_test_tube with liquid (5)
+REMOVED	Glass_Lab_test_tube with liquid (4)
+REMOVED	Glass_Lab_test_tube with liquid (6)
+REMOVED	Boiling_Liquid_Stand (3)
+REMOVED	forceps (2)
+REMOVED	analytical_lab_instruments (3)
+REMOVED	Glass_Lab_test_tube with liquid (10)
+REMOVED	Glass_Lab_test_tube with liquid (9)

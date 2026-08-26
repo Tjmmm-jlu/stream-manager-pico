@@ -1,0 +1,6 @@
+Finished: 2026-08-14T13:28:01.9699728+08:00
+Duplicate instance cleanup: complete
+Uncontrolled apparatus cleanup: complete
+Distractor layout generator: installed
+Expected clean registry: 8
+Expected generated distractors: 0

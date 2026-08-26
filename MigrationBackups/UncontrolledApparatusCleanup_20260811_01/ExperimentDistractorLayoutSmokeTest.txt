@@ -1,0 +1,7 @@
+Low-density generation: PASS
+Generated during test: 8
+Registry during test: 16
+Unique IDs during test: 16
+Clear generated: PASS
+Final generated distractors: 0
+Final semantic registry count: 8

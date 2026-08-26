@@ -1,0 +1,57 @@
+Scene: Assets/Scenes/Preparation Experiment Scene_AStage.unity
+Sequence targets: 8
+
+ROOTS
+ROOT	florence_flask with water	active=True	children=1	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/florence_flask with water.prefab
+ROOT	water Shelf (1)	active=True	children=2	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/water Shelf.prefab
+ROOT	wall01 (4)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/wall01.prefab
+ROOT	wall01 (5)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/wall01.prefab
+ROOT	shelf showcase (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/shelf showcase.prefab
+ROOT	shelf (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/shelf.prefab
+ROOT	shelf showcase (2)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/shelf showcase.prefab
+ROOT	floor (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/floor.prefab
+ROOT	glass_frame (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/glass_frame.prefab
+ROOT	glass_frame (2)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/glass_frame.prefab
+ROOT	glass	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/glass.prefab
+ROOT	glass (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/glass.prefab
+ROOT	stand glass	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/stand glass.fbx
+ROOT	Graduated_Cylinder (1)	active=True	children=1	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Graduated_Cylinder with liquid.prefab
+ROOT	stand glass (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/stand glass.fbx
+ROOT	rack (2)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/rack.prefab
+ROOT	roof	active=True	children=5	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/roof.prefab
+ROOT	roof (1)	active=True	children=2	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/roof.prefab
+ROOT	roof (6)	active=True	children=2	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/roof.prefab
+ROOT	roof (4)	active=True	children=1	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/roof.prefab
+ROOT	Spot Light	active=True	children=0	prefab=-
+ROOT	pillar (5)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/pillar.prefab
+ROOT	Area Light (13)	active=True	children=0	prefab=-
+ROOT	glass_funnel (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/glass_funnel.fbx
+ROOT	Glass_medical_dropper	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/Glass_medical_dropper.fbx
+ROOT	Test_tube_rack	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/Test_tube_rack.fbx
+ROOT	Spirit_Lamp with water	active=True	children=4	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Spirit_Lamp with water.prefab
+ROOT	Beaker water	active=True	children=1	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Beaker water.prefab
+ROOT	drawer handle (2)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/drawer handle.fbx
+ROOT	drawer handle (3)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/drawer handle.fbx
+ROOT	china dish (1)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Models/china dish.fbx
+ROOT	rack (12)	active=True	children=0	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/rack.prefab
+ROOT	PICO XR Origin	active=True	children=2	prefab=-
+ROOT	streamcamera	active=True	children=0	prefab=-
+
+APPARATUS_AND_INTERACTABLES
+ITEM	Beaker water	active=True	target=True	targetId=beaker	containsTarget=False	insideTarget=False	semanticId=beaker	xrGrab=True	children=1	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Beaker water.prefab
+ITEM	Beaker water/Beaker liquid	active=True	target=False	targetId=	containsTarget=False	insideTarget=True	semanticId=	xrGrab=False	children=0	outerPrefabRoot=False	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Beakerwater.prefab
+ITEM	china dish (1)	active=True	target=True	targetId=china_dish	containsTarget=False	insideTarget=False	semanticId=china_dish	xrGrab=True	children=0	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Models/china dish.fbx
+ITEM	florence_flask with water	active=True	target=True	targetId=florence_flask	containsTarget=False	insideTarget=False	semanticId=florence_flask	xrGrab=True	children=1	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/florence_flask with water.prefab
+ITEM	florence_flask with water/florence_flask3	active=True	target=False	targetId=	containsTarget=False	insideTarget=True	semanticId=	xrGrab=False	children=0	outerPrefabRoot=False	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/florence_flask water.prefab
+ITEM	glass_funnel (1)	active=True	target=True	targetId=glass_funnel	containsTarget=False	insideTarget=False	semanticId=glass_funnel	xrGrab=True	children=0	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Models/glass_funnel.fbx
+ITEM	Glass_medical_dropper	active=True	target=True	targetId=dropper	containsTarget=False	insideTarget=False	semanticId=dropper	xrGrab=True	children=0	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Models/Glass_medical_dropper.fbx
+ITEM	Graduated_Cylinder (1)	active=True	target=True	targetId=graduated_cylinder	containsTarget=False	insideTarget=False	semanticId=graduated_cylinder	xrGrab=True	children=1	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Graduated_Cylinder with liquid.prefab
+ITEM	Graduated_Cylinder (1)/Glass_Lab_test_tube6 (1)	active=True	target=False	targetId=	containsTarget=False	insideTarget=True	semanticId=	xrGrab=False	children=0	outerPrefabRoot=False	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Glass_Lab_test_tube water.prefab
+ITEM	PICO XR Origin/Camera Offset/HandLeft/RayPose/DefaultRay	active=True	target=False	targetId=	containsTarget=False	insideTarget=False	semanticId=	xrGrab=False	children=0	outerPrefabRoot=False	prefab=Packages/com.unity.xr.picoxr/Assets/Resources/Prefabs/HandLeft.prefab
+ITEM	PICO XR Origin/Camera Offset/HandRight/RayPose/DefaultRay	active=True	target=False	targetId=	containsTarget=False	insideTarget=False	semanticId=	xrGrab=False	children=0	outerPrefabRoot=False	prefab=Packages/com.unity.xr.picoxr/Assets/Resources/Prefabs/HandRight.prefab
+ITEM	rack (12)	active=True	target=False	targetId=	containsTarget=False	insideTarget=False	semanticId=	xrGrab=False	children=0	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/rack.prefab
+ITEM	rack (2)	active=True	target=False	targetId=	containsTarget=False	insideTarget=False	semanticId=	xrGrab=False	children=0	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/rack.prefab
+ITEM	Spirit_Lamp with water	active=True	target=True	targetId=spirit_lamp	containsTarget=False	insideTarget=False	semanticId=spirit_lamp	xrGrab=True	children=4	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Spirit_Lamp with water.prefab
+ITEM	Spirit_Lamp with water/pCylinder14	active=True	target=False	targetId=	containsTarget=False	insideTarget=True	semanticId=	xrGrab=False	children=0	outerPrefabRoot=False	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Spirit_Lamp with water.prefab
+ITEM	Spirit_Lamp with water/pCylinder15	active=True	target=False	targetId=	containsTarget=False	insideTarget=True	semanticId=	xrGrab=False	children=0	outerPrefabRoot=False	prefab=Assets/3D Laboratory Environment with Appratus/Prefabs/Spirit_Lamp with water.prefab
+ITEM	Test_tube_rack	active=True	target=True	targetId=test_tube_rack	containsTarget=False	insideTarget=False	semanticId=test_tube_rack	xrGrab=True	children=0	outerPrefabRoot=True	prefab=Assets/3D Laboratory Environment with Appratus/Models/Test_tube_rack.fbx

@@ -1,0 +1,897 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using Unity.RenderStreaming;
+using Unity.WebRTC;
+using UnityEngine;
+
+public sealed class GuidanceDataChannelReceiver : DataChannelBase
+{
+    [Serializable]
+    private sealed class GuidanceCommand
+    {
+        public string type;
+        public string mode;
+        public string trialId;
+        public string condition;
+        public string targetId;
+        public string query;
+        public string category;
+        public string color;
+        public string[] candidateIds;
+        public int stepIndex;
+    }
+
+    [Serializable]
+    private sealed class CandidateVisualSummary
+    {
+        public string id;
+        public string displayName;
+        public bool hasBounds;
+        public bool visible;
+        public float xMin;
+        public float yMin;
+        public float xMax;
+        public float yMax;
+        public float depth;
+    }
+
+    [Serializable]
+    private sealed class GuidanceResponse
+    {
+        public string type;
+        public bool ok;
+        public string mode;
+        public string trialId;
+        public string state;
+        public string targetId;
+        public string targetName;
+        public string message;
+        public int candidateCount;
+        public SemanticObjectSummary[] candidates;
+        public CandidateVisualSummary[] candidateVisuals;
+        public int stepIndex;
+        public int stepCount;
+        public string instruction;
+        public bool sequenceComplete;
+        public double unityTime;
+    }
+
+    [Header("Existing guidance")]
+    [SerializeField] private GuidanceManager guidanceManager;
+    [SerializeField] private PreparationSequenceController preparationSequence;
+
+    [Header("A-stage experiment foundation")]
+    [SerializeField] private SceneObjectRegistry objectRegistry;
+    [SerializeField] private ExperimentStateController stateController;
+    [SerializeField] private ExperimentLogger experimentLogger;
+
+    [Header("PC candidate visualization")]
+    [SerializeField] private Camera renderStreamingCamera;
+    [SerializeField, Min(0.05f)] private float candidateVisualInterval = 0.1f;
+
+    private string _activeTrialId = string.Empty;
+    private bool _readySent;
+    private readonly List<SemanticObject> _previewCandidates =
+        new List<SemanticObject>();
+    private float _nextCandidateVisualTime;
+
+    public GuidanceManager GuidanceManager
+    {
+        get => guidanceManager;
+        set
+        {
+            Unsubscribe();
+            guidanceManager = value;
+            Subscribe();
+        }
+    }
+
+    public PreparationSequenceController PreparationSequence
+    {
+        get => preparationSequence;
+        set
+        {
+            Unsubscribe();
+            preparationSequence = value;
+            Subscribe();
+        }
+    }
+
+    public SceneObjectRegistry ObjectRegistry
+    {
+        get => objectRegistry;
+        set => objectRegistry = value;
+    }
+
+    public ExperimentStateController StateController
+    {
+        get => stateController;
+        set => stateController = value;
+    }
+
+    public ExperimentLogger ExperimentLogger
+    {
+        get => experimentLogger;
+        set => experimentLogger = value;
+    }
+
+    private void Reset()
+    {
+        local = false;
+        label = "guidance";
+    }
+
+    private void Awake()
+    {
+        local = false;
+        label = "guidance";
+        guidanceManager = guidanceManager != null
+            ? guidanceManager
+            : GetComponent<GuidanceManager>();
+        preparationSequence = preparationSequence != null
+            ? preparationSequence
+            : GetComponent<PreparationSequenceController>();
+        objectRegistry = objectRegistry != null
+            ? objectRegistry
+            : GetComponent<SceneObjectRegistry>();
+        stateController = stateController != null
+            ? stateController
+            : GetComponent<ExperimentStateController>();
+        experimentLogger = experimentLogger != null
+            ? experimentLogger
+            : GetComponent<ExperimentLogger>();
+        renderStreamingCamera = ResolveRenderStreamingCamera();
+        objectRegistry?.Refresh();
+    }
+
+    private void Update()
+    {
+        if (!IsConnected || _previewCandidates.Count == 0 ||
+            Time.unscaledTime < _nextCandidateVisualTime)
+        {
+            return;
+        }
+
+        _nextCandidateVisualTime =
+            Time.unscaledTime + Mathf.Max(0.05f, candidateVisualInterval);
+        SendCandidateVisuals(null);
+    }
+
+    private void OnEnable()
+    {
+        Subscribe();
+    }
+
+    private void OnDisable()
+    {
+        Unsubscribe();
+    }
+
+    public override void SetChannel(string connectionId, RTCDataChannel channel)
+    {
+        _readySent = false;
+        base.SetChannel(connectionId, channel);
+        if (channel != null && IsConnected)
+        {
+            NotifyChannelReady(connectionId);
+        }
+    }
+
+    protected override void OnOpen(string connectionId)
+    {
+        base.OnOpen(connectionId);
+        NotifyChannelReady(connectionId);
+    }
+
+    protected override void OnClose(string connectionId)
+    {
+        base.OnClose(connectionId);
+        _readySent = false;
+        _previewCandidates.Clear();
+        experimentLogger?.LogEvent("guidance_channel_closed", connectionId);
+        Debug.Log($"[Guidance] DataChannel closed. connection={connectionId}");
+    }
+
+    protected override void OnMessage(byte[] bytes)
+    {
+        string json = Encoding.UTF8.GetString(bytes);
+        GuidanceCommand command;
+        try
+        {
+            command = JsonUtility.FromJson<GuidanceCommand>(json);
+        }
+        catch (Exception exception)
+        {
+            SendError(null, $"Malformed JSON: {exception.Message}");
+            return;
+        }
+
+        if (command == null || string.IsNullOrWhiteSpace(command.type))
+        {
+            SendError(command, "Command type is missing.");
+            return;
+        }
+
+        if (guidanceManager == null)
+        {
+            SendError(command, "GuidanceManager is missing.");
+            return;
+        }
+
+        experimentLogger?.LogEvent("web_command_received", json);
+        switch (command.type.Trim().ToLowerInvariant())
+        {
+            case "set_guidance_mode":
+                ApplyMode(command, false);
+                break;
+            case "start_trial":
+                StartTrial(command);
+                break;
+            case "query_objects":
+                QueryObjects(command);
+                break;
+            case "get_object_catalog":
+                SendObjectCatalog(command);
+                break;
+            case "preview_candidates":
+                SetCandidatePreview(command);
+                break;
+            case "clear_candidate_preview":
+                ClearCandidatePreview(command);
+                break;
+            case "select_target":
+            case "confirm_target":
+            case "show_target":
+                SelectTarget(command);
+                break;
+            case "clear_guidance":
+            case "clear_target":
+                _previewCandidates.Clear();
+                guidanceManager.ClearTarget();
+                SendResponse(
+                    "guidance_cleared", true, command,
+                    null, null, "Guidance target cleared.");
+                break;
+            case "complete_trial":
+                _previewCandidates.Clear();
+                stateController?.CompleteTrial();
+                guidanceManager.ClearTarget();
+                experimentLogger?.LogEvent("trial_completed");
+                SendResponse(
+                    "trial_completed", true, command,
+                    null, null, "Trial completed.");
+                break;
+            case "abort_trial":
+                _previewCandidates.Clear();
+                stateController?.AbortTrial();
+                guidanceManager.ClearTarget();
+                experimentLogger?.LogEvent("trial_aborted");
+                SendResponse(
+                    "trial_aborted", true, command,
+                    null, null, "Trial aborted.");
+                _activeTrialId = string.Empty;
+                break;
+            case "ping":
+                SendResponse(
+                    "guidance_pong", true, command,
+                    null, null, "Unity guidance channel is alive.");
+                break;
+            case "start_sequence":
+                StartSequence(command);
+                break;
+            case "next_step":
+            case "complete_step":
+                ExecuteSequenceCommand(
+                    preparationSequence != null && preparationSequence.NextStep(),
+                    command,
+                    "Could not advance the preparation sequence.");
+                break;
+            case "previous_step":
+                ExecuteSequenceCommand(
+                    preparationSequence != null && preparationSequence.PreviousStep(),
+                    command,
+                    "Could not move to the previous preparation step.");
+                break;
+            case "show_step":
+                ExecuteSequenceCommand(
+                    preparationSequence != null &&
+                    preparationSequence.ShowStep(command.stepIndex),
+                    command,
+                    $"Invalid preparation step index: {command.stepIndex}");
+                break;
+            case "complete_sequence":
+                if (preparationSequence == null)
+                {
+                    SendSequenceError(command, "PreparationSequenceController is missing.");
+                }
+                else
+                {
+                    preparationSequence.CompleteSequence();
+                }
+                break;
+            case "reset_sequence":
+                if (preparationSequence == null)
+                {
+                    SendSequenceError(command, "PreparationSequenceController is missing.");
+                }
+                else
+                {
+                    preparationSequence.ResetSequence();
+                    stateController?.ResetTrial();
+                }
+                break;
+            default:
+                SendError(command, $"Unsupported command type: {command.type}");
+                break;
+        }
+    }
+
+    private void NotifyChannelReady(string connectionId)
+    {
+        if (_readySent)
+        {
+            return;
+        }
+
+        _readySent = true;
+        experimentLogger?.LogEvent("guidance_channel_opened", connectionId);
+        SendResponse(
+            "guidance_ready",
+            guidanceManager != null && objectRegistry != null,
+            null,
+            null,
+            null,
+            objectRegistry != null
+                ? $"Unity guidance controller is ready with {objectRegistry.Count} objects."
+                : "SceneObjectRegistry is missing.");
+        Debug.Log(
+            $"[Guidance] DataChannel opened. connection={connectionId} label={Label}");
+    }
+
+    private void StartTrial(GuidanceCommand command)
+    {
+        _activeTrialId = string.IsNullOrWhiteSpace(command.trialId)
+            ? $"trial-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}"
+            : command.trialId.Trim();
+        guidanceManager.ClearTarget();
+        stateController?.StartTrial(_activeTrialId, command.condition);
+        experimentLogger?.LogEvent("trial_started");
+
+        if (string.IsNullOrWhiteSpace(command.mode))
+        {
+            command.mode = "highlight";
+        }
+        ApplyMode(command, true);
+    }
+
+    private void QueryObjects(GuidanceCommand command)
+    {
+        if (!EnsureRegistry(command))
+        {
+            return;
+        }
+        EnsureTrial(command);
+        stateController?.BeginCandidateGeneration();
+        List<SemanticObject> candidates = objectRegistry.FindCandidates(
+            command.query,
+            command.category,
+            command.color,
+            true);
+        stateController?.SetCandidates(candidates);
+        experimentLogger?.LogEvent(
+            "candidate_query_completed",
+            $"query={command.query};category={command.category};" +
+            $"color={command.color};count={candidates.Count}");
+        SendResponse(
+            "object_candidates",
+            true,
+            command,
+            null,
+            null,
+            $"Found {candidates.Count} candidate objects.",
+            candidates.Select(SemanticObjectSummary.From).ToArray());
+    }
+
+    private void SendObjectCatalog(GuidanceCommand command)
+    {
+        if (!EnsureRegistry(command))
+        {
+            return;
+        }
+        objectRegistry.Refresh();
+        SendResponse(
+            "object_catalog",
+            true,
+            command,
+            null,
+            null,
+            $"Scene catalog contains {objectRegistry.Count} objects.",
+            objectRegistry.GetCatalog());
+    }
+
+    private void SetCandidatePreview(GuidanceCommand command)
+    {
+        if (!EnsureRegistry(command))
+        {
+            return;
+        }
+
+        _previewCandidates.Clear();
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string candidateId in command.candidateIds ?? Array.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(candidateId) ||
+                !seenIds.Add(candidateId.Trim()) ||
+                !objectRegistry.TryGet(candidateId, out SemanticObject candidate) ||
+                candidate == null || !candidate.Selectable)
+            {
+                continue;
+            }
+            _previewCandidates.Add(candidate);
+        }
+
+        _nextCandidateVisualTime = 0f;
+        experimentLogger?.LogEvent(
+            "candidate_preview_set",
+            string.Join(",", _previewCandidates.Select(item => item.StableId)));
+        SendCandidateVisuals(command);
+    }
+
+    private void ClearCandidatePreview(GuidanceCommand command)
+    {
+        _previewCandidates.Clear();
+        experimentLogger?.LogEvent("candidate_preview_cleared");
+        SendCandidateVisuals(command);
+    }
+
+    private void SendCandidateVisuals(GuidanceCommand command)
+    {
+        renderStreamingCamera = ResolveRenderStreamingCamera();
+        CandidateVisualSummary[] visuals = BuildCandidateVisuals();
+        bool hasCamera = renderStreamingCamera != null;
+        SendResponse(
+            "candidate_visuals",
+            hasCamera,
+            command,
+            null,
+            null,
+            hasCamera
+                ? $"Projected {visuals.Length} candidates into the PC stream."
+                : "Render streaming camera is missing.",
+            candidateVisuals: visuals);
+    }
+
+    private CandidateVisualSummary[] BuildCandidateVisuals()
+    {
+        if (renderStreamingCamera == null)
+        {
+            return Array.Empty<CandidateVisualSummary>();
+        }
+
+        Plane[] frustumPlanes =
+            GeometryUtility.CalculateFrustumPlanes(renderStreamingCamera);
+        return _previewCandidates
+            .Where(candidate => candidate != null)
+            .Select(candidate => ProjectCandidate(candidate, frustumPlanes))
+            .ToArray();
+    }
+
+    private CandidateVisualSummary ProjectCandidate(
+        SemanticObject candidate,
+        Plane[] frustumPlanes)
+    {
+        var visual = new CandidateVisualSummary
+        {
+            id = candidate.StableId,
+            displayName = candidate.DisplayName
+        };
+        if (!candidate.gameObject.activeInHierarchy ||
+            !TryGetWorldBounds(candidate, out Bounds bounds))
+        {
+            return visual;
+        }
+
+        visual.hasBounds = true;
+        Vector3 center = renderStreamingCamera.WorldToViewportPoint(bounds.center);
+        visual.depth = center.z;
+
+        Vector3 min = bounds.min;
+        Vector3 max = bounds.max;
+        Vector3[] corners =
+        {
+            new Vector3(min.x, min.y, min.z),
+            new Vector3(min.x, min.y, max.z),
+            new Vector3(min.x, max.y, min.z),
+            new Vector3(min.x, max.y, max.z),
+            new Vector3(max.x, min.y, min.z),
+            new Vector3(max.x, min.y, max.z),
+            new Vector3(max.x, max.y, min.z),
+            new Vector3(max.x, max.y, max.z)
+        };
+
+        float xMin = float.PositiveInfinity;
+        float yMin = float.PositiveInfinity;
+        float xMax = float.NegativeInfinity;
+        float yMax = float.NegativeInfinity;
+        int frontCornerCount = 0;
+        foreach (Vector3 corner in corners)
+        {
+            Vector3 viewportPoint =
+                renderStreamingCamera.WorldToViewportPoint(corner);
+            if (viewportPoint.z <= renderStreamingCamera.nearClipPlane)
+            {
+                continue;
+            }
+
+            frontCornerCount++;
+            xMin = Mathf.Min(xMin, viewportPoint.x);
+            yMin = Mathf.Min(yMin, viewportPoint.y);
+            xMax = Mathf.Max(xMax, viewportPoint.x);
+            yMax = Mathf.Max(yMax, viewportPoint.y);
+        }
+
+        bool intersectsViewport = frontCornerCount > 0 &&
+                                  xMax >= 0f && xMin <= 1f &&
+                                  yMax >= 0f && yMin <= 1f;
+        visual.visible = intersectsViewport &&
+                         GeometryUtility.TestPlanesAABB(frustumPlanes, bounds);
+        if (!visual.visible)
+        {
+            return visual;
+        }
+
+        visual.xMin = Mathf.Clamp01(xMin);
+        visual.yMin = Mathf.Clamp01(yMin);
+        visual.xMax = Mathf.Clamp01(xMax);
+        visual.yMax = Mathf.Clamp01(yMax);
+        return visual;
+    }
+
+    private static bool TryGetWorldBounds(
+        SemanticObject candidate,
+        out Bounds bounds)
+    {
+        bounds = default;
+        bool found = false;
+        foreach (Renderer renderer in
+                 candidate.GetComponentsInChildren<Renderer>(false))
+        {
+            if (renderer == null || !renderer.enabled)
+            {
+                continue;
+            }
+            if (!found)
+            {
+                bounds = renderer.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+        if (found)
+        {
+            return true;
+        }
+
+        foreach (Collider collider in
+                 candidate.GetComponentsInChildren<Collider>(false))
+        {
+            if (collider == null || !collider.enabled)
+            {
+                continue;
+            }
+            if (!found)
+            {
+                bounds = collider.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(collider.bounds);
+            }
+        }
+        return found;
+    }
+
+    private Camera ResolveRenderStreamingCamera()
+    {
+        if (renderStreamingCamera != null)
+        {
+            return renderStreamingCamera;
+        }
+
+        GameObject streamCameraObject = GameObject.Find("streamcamera");
+        if (streamCameraObject != null &&
+            streamCameraObject.TryGetComponent(out Camera streamCamera))
+        {
+            return streamCamera;
+        }
+
+        return FindObjectsOfType<Camera>(true)
+                   .FirstOrDefault(camera =>
+                       camera != null &&
+                       camera.name.IndexOf(
+                           "stream", StringComparison.OrdinalIgnoreCase) >= 0)
+               ?? Camera.main;
+    }
+
+    private void SelectTarget(GuidanceCommand command)
+    {
+        if (!EnsureRegistry(command))
+        {
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(command.targetId))
+        {
+            SendError(command, "targetId is required.");
+            return;
+        }
+        if (!objectRegistry.TryGet(command.targetId, out SemanticObject target))
+        {
+            SendError(command, $"Unknown targetId: {command.targetId}");
+            return;
+        }
+        if (!target.Selectable)
+        {
+            SendError(command, $"Target is not selectable: {command.targetId}");
+            return;
+        }
+
+        EnsureTrial(command);
+        string requestedMode = string.IsNullOrWhiteSpace(command.mode)
+            ? "highlight"
+            : command.mode;
+        if (!guidanceManager.TrySetMode(requestedMode))
+        {
+            SendError(command, $"Unknown guidance mode: {requestedMode}");
+            return;
+        }
+
+        stateController?.ConfirmTarget(target.StableId);
+        experimentLogger?.LogEvent("target_confirmed", target.StableId);
+        guidanceManager.ShowTarget(target.gameObject);
+    }
+
+    private void ApplyMode(GuidanceCommand command, bool isTrialStart)
+    {
+        bool applied = guidanceManager.TrySetMode(command.mode);
+        string appliedMode = GuidanceManager.GetModeName(guidanceManager.ActiveMode);
+        SendResponse(
+            isTrialStart ? "trial_ready" : "guidance_mode_applied",
+            applied,
+            command,
+            null,
+            null,
+            applied
+                ? $"Guidance mode set to {appliedMode}."
+                : $"Unknown guidance mode: {command.mode}");
+    }
+
+    private void StartSequence(GuidanceCommand command)
+    {
+        if (preparationSequence == null)
+        {
+            SendSequenceError(command, "PreparationSequenceController is missing.");
+            return;
+        }
+
+        EnsureTrial(command);
+        if (!string.IsNullOrWhiteSpace(command.mode) &&
+            !guidanceManager.TrySetMode(command.mode))
+        {
+            SendSequenceError(command, $"Unknown guidance mode: {command.mode}");
+            return;
+        }
+
+        if (!preparationSequence.StartSequence())
+        {
+            SendSequenceError(
+                command, "The preparation sequence has no valid configured steps.");
+        }
+    }
+
+    private void ExecuteSequenceCommand(
+        bool succeeded,
+        GuidanceCommand command,
+        string error)
+    {
+        if (!succeeded)
+        {
+            SendSequenceError(
+                command,
+                preparationSequence == null
+                    ? "PreparationSequenceController is missing."
+                    : error);
+        }
+    }
+
+    private void EnsureTrial(GuidanceCommand command)
+    {
+        if (stateController != null &&
+            stateController.CurrentState != ExperimentTrialState.Idle &&
+            stateController.CurrentState != ExperimentTrialState.Completed &&
+            stateController.CurrentState != ExperimentTrialState.Aborted)
+        {
+            return;
+        }
+
+        _activeTrialId = string.IsNullOrWhiteSpace(command?.trialId)
+            ? $"trial-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}"
+            : command.trialId.Trim();
+        stateController?.StartTrial(_activeTrialId, command?.condition);
+        experimentLogger?.LogEvent("trial_started_implicitly");
+    }
+
+    private bool EnsureRegistry(GuidanceCommand command)
+    {
+        if (objectRegistry != null)
+        {
+            return true;
+        }
+
+        objectRegistry = SceneObjectRegistry.Instance ??
+                         FindObjectOfType<SceneObjectRegistry>(true);
+        if (objectRegistry != null)
+        {
+            objectRegistry.Refresh();
+            return true;
+        }
+
+        SendError(command, "SceneObjectRegistry is missing.");
+        return false;
+    }
+
+    private void Subscribe()
+    {
+        if (guidanceManager != null)
+        {
+            guidanceManager.TargetShown -= OnTargetShown;
+            guidanceManager.TargetCleared -= OnTargetCleared;
+            guidanceManager.TargetShown += OnTargetShown;
+            guidanceManager.TargetCleared += OnTargetCleared;
+        }
+        if (preparationSequence != null)
+        {
+            preparationSequence.StateChanged -= OnSequenceStateChanged;
+            preparationSequence.StateChanged += OnSequenceStateChanged;
+        }
+    }
+
+    private void Unsubscribe()
+    {
+        if (guidanceManager != null)
+        {
+            guidanceManager.TargetShown -= OnTargetShown;
+            guidanceManager.TargetCleared -= OnTargetCleared;
+        }
+        if (preparationSequence != null)
+        {
+            preparationSequence.StateChanged -= OnSequenceStateChanged;
+        }
+    }
+
+    private void OnSequenceStateChanged()
+    {
+        PreparationSequenceController.Step step = preparationSequence?.CurrentStep;
+        bool isComplete = preparationSequence != null && preparationSequence.IsComplete;
+        bool isRunning = preparationSequence != null && preparationSequence.IsRunning;
+        experimentLogger?.LogEvent(
+            isComplete ? "sequence_completed" : "sequence_state_changed",
+            step?.id);
+        SendResponse(
+            "sequence_state",
+            true,
+            null,
+            step?.target != null ? GetTargetId(step.target) : null,
+            step?.target != null ? step.target.name : null,
+            isComplete
+                ? "Preparation sequence completed."
+                : isRunning
+                    ? "Preparation step is active; target cue awaits expert confirmation."
+                    : "Preparation sequence reset.",
+            null,
+            preparationSequence?.CurrentStepIndex ?? -1,
+            preparationSequence?.StepCount ?? 0,
+            step?.instruction,
+            isComplete);
+    }
+
+    private void OnTargetShown(GameObject target, GuidanceMode mode)
+    {
+        string targetId = GetTargetId(target);
+        stateController?.MarkGuidanceShown(targetId);
+        experimentLogger?.LogEvent("guidance_target_shown", targetId);
+        SendResponse(
+            "guidance_target_shown",
+            true,
+            null,
+            targetId,
+            target != null ? target.name : null,
+            "Unity rendered the confirmed guidance target.");
+    }
+
+    private void OnTargetCleared()
+    {
+        experimentLogger?.LogEvent("guidance_target_cleared");
+        SendResponse(
+            "guidance_target_cleared",
+            true,
+            null,
+            null,
+            null,
+            "Unity cleared the guidance target.");
+    }
+
+    private void SendSequenceError(GuidanceCommand command, string message)
+    {
+        SendResponse("sequence_error", false, command, null, null, message);
+    }
+
+    private void SendError(GuidanceCommand command, string message)
+    {
+        experimentLogger?.LogEvent("command_error", message);
+        SendResponse("guidance_error", false, command, null, null, message);
+    }
+
+    private void SendResponse(
+        string type,
+        bool ok,
+        GuidanceCommand command,
+        string targetId,
+        string targetName,
+        string message,
+        SemanticObjectSummary[] candidates = null,
+        int stepIndex = -1,
+        int stepCount = 0,
+        string instruction = null,
+        bool sequenceComplete = false,
+        CandidateVisualSummary[] candidateVisuals = null)
+    {
+        if (!IsConnected)
+        {
+            return;
+        }
+
+        string trialId = !string.IsNullOrWhiteSpace(command?.trialId)
+            ? command.trialId
+            : !string.IsNullOrWhiteSpace(stateController?.TrialId)
+                ? stateController.TrialId
+                : _activeTrialId;
+        var response = new GuidanceResponse
+        {
+            type = type,
+            ok = ok,
+            mode = guidanceManager != null
+                ? GuidanceManager.GetModeName(guidanceManager.ActiveMode)
+                : "none",
+            trialId = trialId,
+            state = stateController != null
+                ? stateController.CurrentState.ToString()
+                : ExperimentTrialState.Idle.ToString(),
+            targetId = targetId,
+            targetName = targetName,
+            message = message,
+            candidateCount = candidates?.Length ?? candidateVisuals?.Length ?? 0,
+            candidates = candidates ?? Array.Empty<SemanticObjectSummary>(),
+            candidateVisuals = candidateVisuals ??
+                               Array.Empty<CandidateVisualSummary>(),
+            stepIndex = stepIndex,
+            stepCount = stepCount,
+            instruction = instruction,
+            sequenceComplete = sequenceComplete,
+            unityTime = Time.realtimeSinceStartupAsDouble
+        };
+        Send(JsonUtility.ToJson(response));
+    }
+
+    private static string GetTargetId(GameObject target)
+    {
+        return target != null
+            ? target.GetComponentInParent<SemanticObject>()?.StableId
+            : null;
+    }
+}

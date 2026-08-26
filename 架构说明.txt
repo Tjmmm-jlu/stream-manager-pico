@@ -1,0 +1,27 @@
+项目架构说明
+
+一、整体架构
+- PC端：浏览器打开viewer网页，通过WebRTC RenderStreaming接收VR视角画面，鼠标点击发送指令
+- VR端：Quest运行Unity APK，本地渲染VR画面
+- 通信：Unity RenderStreaming + WebSocket Signaling Server
+
+二、摄像机架构
+- 只保留VR端摄像机（OVRCameraRig → TrackingSpace → CenterEyeAnchor）
+- PC端不再有独立摄像机，VideoStreamSender挂在CenterEyeAnchor上
+- PC网页看到的是VR头显的实时视角
+- PlaterController的renderStreamingCamera引用指向CenterEyeAnchor上的Camera
+
+三、射线检测
+- PC端点击 → Unity接收鼠标输入 → 用CenterEyeAnchor的Camera做ScreenPointToRay → 射线检测场景物体
+- 目标物体需要有Collider且Tag为"Interactable"
+
+四、已知问题及解决
+- Camera.main在Quest运行时指向VR摄像机，不能用于RenderStreaming射线检测，需显式引用renderStreamingCamera
+- FirstPersonLocomotor会在运行时强制对齐角色朝向到头显朝向，导致视角异常旋转和掉落
+  → 解决：确保OVRPlayerController初始旋转为(0,0,0)，或关闭HMD Rotates Y选项
+
+五、IP配置（局域网部署）
+- PC和Quest必须在同一WiFi下
+- 启动WebApp服务器后，Quest浏览器访问 http://[PC局域网IP]:80/viewer/
+- Unity RenderStreaming的Signaling URL改为 ws://[PC局域网IP]:80
+- 服务器已监听所有网卡，无需额外配置
