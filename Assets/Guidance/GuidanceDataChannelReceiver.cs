@@ -13,6 +13,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     {
         public string type;
         public string mode;
+        public string density;
         public string trialId;
         public string condition;
         public string targetId;
@@ -21,6 +22,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public string color;
         public string[] candidateIds;
         public int stepIndex;
+        public int seed;
     }
 
     [Serializable]
@@ -43,6 +45,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public string type;
         public bool ok;
         public string mode;
+        public string density;
         public string trialId;
         public string state;
         public string targetId;
@@ -55,6 +58,8 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public int stepCount;
         public string instruction;
         public bool sequenceComplete;
+        public int generatedCount;
+        public int registryCount;
         public double unityTime;
     }
 
@@ -66,6 +71,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     [SerializeField] private SceneObjectRegistry objectRegistry;
     [SerializeField] private ExperimentStateController stateController;
     [SerializeField] private ExperimentLogger experimentLogger;
+    [SerializeField] private ExperimentDistractorLayoutGenerator layoutGenerator;
 
     [Header("PC candidate visualization")]
     [SerializeField] private Camera renderStreamingCamera;
@@ -142,6 +148,9 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         experimentLogger = experimentLogger != null
             ? experimentLogger
             : GetComponent<ExperimentLogger>();
+        layoutGenerator = layoutGenerator != null
+            ? layoutGenerator
+            : FindObjectOfType<ExperimentDistractorLayoutGenerator>(true);
         renderStreamingCamera = ResolveRenderStreamingCamera();
         objectRegistry?.Refresh();
     }
@@ -225,6 +234,10 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         {
             case "set_guidance_mode":
                 ApplyMode(command, false);
+                break;
+            case "set_layout_density":
+            case "set_scene_density":
+                ApplyLayoutDensity(command);
                 break;
             case "start_trial":
                 StartTrial(command);
@@ -671,6 +684,76 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                 : $"Unknown guidance mode: {command.mode}");
     }
 
+    private void ApplyLayoutDensity(GuidanceCommand command)
+    {
+        if (layoutGenerator == null)
+        {
+            layoutGenerator = FindObjectOfType<ExperimentDistractorLayoutGenerator>(true);
+        }
+
+        if (layoutGenerator == null)
+        {
+            SendError(command, "Experiment layout generator is missing.");
+            return;
+        }
+
+        if (!TryParseLayoutSelection(command.density, out ExperimentLayoutSelection selection))
+        {
+            SendError(
+                command,
+                $"Unknown layout density: {command.density}. " +
+                "Expected low, medium, high, or clear.");
+            return;
+        }
+
+        int seed = command.seed == 0
+            ? layoutGenerator.RandomSeed
+            : command.seed;
+        layoutGenerator.ApplySelection(selection, "pc_browser", seed);
+        objectRegistry?.Refresh();
+
+        int generatedCount = layoutGenerator.GeneratedCount;
+        int registryCount = objectRegistry?.Count ?? 0;
+        string density = selection.ToString().ToLowerInvariant();
+        experimentLogger?.LogEvent(
+            "layout_density_applied",
+            $"density={density};generated={generatedCount};registry={registryCount};seed={seed}");
+        SendResponse(
+            "layout_density_applied",
+            true,
+            command,
+            null,
+            null,
+            $"Layout density set to {density}. Generated {generatedCount} objects.",
+            layoutDensity: density,
+            generatedCount: generatedCount,
+            registryCount: registryCount);
+    }
+
+    private static bool TryParseLayoutSelection(
+        string value,
+        out ExperimentLayoutSelection selection)
+    {
+        switch ((value ?? string.Empty).Trim().ToLowerInvariant())
+        {
+            case "low":
+                selection = ExperimentLayoutSelection.Low;
+                return true;
+            case "medium":
+                selection = ExperimentLayoutSelection.Medium;
+                return true;
+            case "high":
+                selection = ExperimentLayoutSelection.High;
+                return true;
+            case "clear":
+                selection = ExperimentLayoutSelection.Clear;
+                return true;
+            default:
+                selection = ExperimentLayoutSelection.Clear;
+                return false;
+        }
+    }
+
     private void StartSequence(GuidanceCommand command)
     {
         if (preparationSequence == null)
@@ -849,7 +932,10 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         int stepCount = 0,
         string instruction = null,
         bool sequenceComplete = false,
-        CandidateVisualSummary[] candidateVisuals = null)
+        CandidateVisualSummary[] candidateVisuals = null,
+        string layoutDensity = null,
+        int generatedCount = -1,
+        int registryCount = -1)
     {
         if (!IsConnected)
         {
@@ -868,6 +954,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             mode = guidanceManager != null
                 ? GuidanceManager.GetModeName(guidanceManager.ActiveMode)
                 : "none",
+            density = layoutDensity,
             trialId = trialId,
             state = stateController != null
                 ? stateController.CurrentState.ToString()
@@ -883,6 +970,8 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             stepCount = stepCount,
             instruction = instruction,
             sequenceComplete = sequenceComplete,
+            generatedCount = generatedCount,
+            registryCount = registryCount,
             unityTime = Time.realtimeSinceStartupAsDouble
         };
         Send(JsonUtility.ToJson(response));

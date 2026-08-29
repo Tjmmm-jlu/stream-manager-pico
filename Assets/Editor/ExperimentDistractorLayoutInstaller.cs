@@ -121,6 +121,10 @@ public static class ExperimentDistractorLayoutInstaller
             tabletopBounds.size.x,
             tabletopBounds.size.z);
         List<ExperimentDistractorDefinition> definitions = BuildDefinitions();
+        ExperimentLayoutRegion region =
+            area.GetComponent<ExperimentLayoutRegion>() ??
+            area.gameObject.AddComponent<ExperimentLayoutRegion>();
+        region.Configure(tabletop, areaSize, 0.04f);
         generator.Configure(
             area,
             tabletop,
@@ -130,6 +134,7 @@ public static class ExperimentDistractorLayoutInstaller
             8,
             10,
             DefaultSeed);
+        generator.SetLayoutRegion(region);
 
         SceneObjectRegistry registry =
             UnityEngine.Object.FindObjectOfType<SceneObjectRegistry>(true);
@@ -147,6 +152,7 @@ public static class ExperimentDistractorLayoutInstaller
 
         EditorUtility.SetDirty(generator);
         EditorUtility.SetDirty(area);
+        EditorUtility.SetDirty(region);
         EditorSceneManager.MarkSceneDirty(scene);
         if (!EditorSceneManager.SaveScene(scene))
         {

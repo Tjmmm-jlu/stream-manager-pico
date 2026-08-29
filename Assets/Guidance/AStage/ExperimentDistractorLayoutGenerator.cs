@@ -55,6 +55,8 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
     [SerializeField] private Transform placementArea;
     [Tooltip("Renderer of the actual tabletop. The placement area is refreshed from its bounds before generation.")]
     [SerializeField] private Renderer placementSurface;
+    [Tooltip("Optional explicit region component. When assigned, it is the source of the placement bounds and padding.")]
+    [SerializeField] private ExperimentLayoutRegion layoutRegion;
     [SerializeField] private Vector2 areaSize = new Vector2(1.6f, 0.9f);
     [Min(0f)] [SerializeField] private float edgePadding = 0.04f;
 
@@ -84,6 +86,7 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
 
     public Transform PlacementArea => placementArea;
     public Renderer PlacementSurface => placementSurface;
+    public ExperimentLayoutRegion LayoutRegion => layoutRegion;
     public Vector2 AreaSize => areaSize;
     public int RandomSeed => randomSeed;
     public int GeneratedCount => GetComponentsInChildren<GeneratedDistractorMarker>(true)
@@ -111,6 +114,9 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
     {
         placementArea = area;
         placementSurface = surface;
+        layoutRegion = area == null
+            ? null
+            : area.GetComponent<ExperimentLayoutRegion>();
         areaSize = new Vector2(Mathf.Max(0.1f, size.x), Mathf.Max(0.1f, size.y));
         definitions = pool?.Where(item => item != null).ToList() ??
             new List<ExperimentDistractorDefinition>();
@@ -119,6 +125,20 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
         highCount = Mathf.Max(mediumCount, high);
         randomSeed = seed;
         generateOnStart = false;
+    }
+
+    public void SetLayoutRegion(ExperimentLayoutRegion region)
+    {
+        layoutRegion = region;
+        if (region == null)
+        {
+            return;
+        }
+
+        placementArea = region.transform;
+        placementSurface = region.PlacementSurface;
+        areaSize = region.AreaSize;
+        edgePadding = region.EdgePadding;
     }
 
     [ContextMenu("Generate Current Complexity")]
@@ -413,6 +433,16 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
 
     private void RefreshPlacementAreaFromSurface()
     {
+        if (layoutRegion != null)
+        {
+            layoutRegion.RefreshFromSurface();
+            placementArea = layoutRegion.transform;
+            placementSurface = layoutRegion.PlacementSurface;
+            areaSize = layoutRegion.AreaSize;
+            edgePadding = layoutRegion.EdgePadding;
+            return;
+        }
+
         if (placementSurface == null || placementArea == null)
         {
             return;
