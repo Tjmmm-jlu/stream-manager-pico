@@ -40,6 +40,21 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     }
 
     [Serializable]
+    private sealed class PlacementZoneVisualSummary
+    {
+        public string id;
+        public string objectId;
+        public string displayName;
+        public bool hasBounds;
+        public bool visible;
+        public float xMin;
+        public float yMin;
+        public float xMax;
+        public float yMax;
+        public float depth;
+    }
+
+    [Serializable]
     private sealed class GuidanceResponse
     {
         public string type;
@@ -54,6 +69,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public int candidateCount;
         public SemanticObjectSummary[] candidates;
         public CandidateVisualSummary[] candidateVisuals;
+        public PlacementZoneVisualSummary[] placementZoneVisuals;
         public int stepIndex;
         public int stepCount;
         public string instruction;
@@ -61,6 +77,21 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public int generatedCount;
         public int registryCount;
         public double unityTime;
+        public string mixingStage;
+        public float cylinderMl;
+        public float beakerMl;
+        public float sourceMl;
+        public float spilledMl;
+        public float mixingProgress;
+        public float targetMl;
+        public float toleranceMl;
+        public bool canRetryLiquid;
+        public string filtrationStage;
+        public float filtrateMl;
+        public float dishMl;
+        public float filtrationInitialMl;
+        public float filtrationMinimumMl;
+        public float filtrationSpilledMl;
     }
 
     [Header("Existing guidance")]
@@ -72,6 +103,13 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     [SerializeField] private ExperimentStateController stateController;
     [SerializeField] private ExperimentLogger experimentLogger;
     [SerializeField] private ExperimentDistractorLayoutGenerator layoutGenerator;
+    [SerializeField] private ExperimentInteractionTracker interactionTracker;
+    private CopperSulfateTransferDetector _copperTransfer;
+    private CopperSulfateMixingDetector _copperMixing;
+    private CopperSulfateFiltrationDetector _copperFiltration;
+    private CopperSulfateFiltrationDetector.FiltrationStage _lastFiltrationStage;
+    private CopperSulfateMixingDetector.MixingStage _lastMixingStage;
+    [SerializeField] private PicoExperimentStartPose experimentStartPose;
 
     [Header("PC candidate visualization")]
     [SerializeField] private Camera renderStreamingCamera;
@@ -151,6 +189,12 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         layoutGenerator = layoutGenerator != null
             ? layoutGenerator
             : FindObjectOfType<ExperimentDistractorLayoutGenerator>(true);
+        interactionTracker = interactionTracker != null
+            ? interactionTracker
+            : GetComponent<ExperimentInteractionTracker>();
+        _copperTransfer = GetComponent<CopperSulfateTransferDetector>();
+        _copperMixing = GetComponent<CopperSulfateMixingDetector>();
+        _copperFiltration = GetComponent<CopperSulfateFiltrationDetector>();
         renderStreamingCamera = ResolveRenderStreamingCamera();
         objectRegistry?.Refresh();
     }
@@ -268,6 +312,13 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                     null, null, "Guidance target cleared.");
                 break;
             case "complete_trial":
+                if (_copperTransfer != null && preparationSequence != null &&
+                    preparationSequence.IsRunning &&
+                    preparationSequence.HasPendingActions)
+                {
+                    SendSequenceError(command, "Complete the copper sulfate transfer before ending the trial.");
+                    break;
+                }
                 _previewCandidates.Clear();
                 stateController?.CompleteTrial();
                 guidanceManager.ClearTarget();
@@ -277,6 +328,8 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                     null, null, "Trial completed.");
                 break;
             case "abort_trial":
+                if (_copperTransfer != null)
+                    preparationSequence?.ResetSequence();
                 _previewCandidates.Clear();
                 stateController?.AbortTrial();
                 guidanceManager.ClearTarget();
@@ -291,15 +344,32 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                     "guidance_pong", true, command,
                     null, null, "Unity guidance channel is alive.");
                 break;
+            case "recenter_experiment":
+                if (experimentStartPose == null)
+                    SendResponse("recenter_state", false, command, null, null, "unavailable");
+                else
+                    experimentStartPose.RequestRecenter();
+                break;
+            case "get_recenter_state":
+                OnRecenterStateChanged();
+                break;
             case "start_sequence":
                 StartSequence(command);
+                break;
+            case "retry_liquid_stage":
+                if (_copperFiltration != null && _copperFiltration.CanRetry)
+                {
+                    if (!_copperFiltration.RetryCurrentStage()) SendSequenceError(command, "The filtration stage is not ready.");
+                }
+                else if (_copperMixing == null || !_copperMixing.RetryCurrentStage())
+                    SendSequenceError(command, "The liquid stage is not active.");
                 break;
             case "next_step":
             case "complete_step":
                 ExecuteSequenceCommand(
                     preparationSequence != null && preparationSequence.NextStep(),
                     command,
-                    "Could not advance the preparation sequence.");
+                    "The current step requires its experiment action to be completed.");
                 break;
             case "previous_step":
                 ExecuteSequenceCommand(
@@ -321,7 +391,8 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                 }
                 else
                 {
-                    preparationSequence.CompleteSequence();
+                    ExecuteSequenceCommand(preparationSequence.CompleteSequence(),
+                        command, "Complete all required experiment actions before ending the sequence.");
                 }
                 break;
             case "reset_sequence":
@@ -331,8 +402,10 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                 }
                 else
                 {
+                    _previewCandidates.Clear();
                     preparationSequence.ResetSequence();
                     stateController?.ResetTrial();
+                    _activeTrialId = string.Empty;
                 }
                 break;
             default:
@@ -361,6 +434,9 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                 : "SceneObjectRegistry is missing.");
         Debug.Log(
             $"[Guidance] DataChannel opened. connection={connectionId} label={Label}");
+        OnRecenterStateChanged();
+        OnMixingStateChanged();
+        OnFiltrationStateChanged();
     }
 
     private void StartTrial(GuidanceCommand command)
@@ -463,6 +539,8 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     {
         renderStreamingCamera = ResolveRenderStreamingCamera();
         CandidateVisualSummary[] visuals = BuildCandidateVisuals();
+        PlacementZoneVisualSummary[] placementZoneVisuals =
+            BuildPlacementZoneVisuals(_previewCandidates);
         bool hasCamera = renderStreamingCamera != null;
         SendResponse(
             "candidate_visuals",
@@ -473,7 +551,8 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             hasCamera
                 ? $"Projected {visuals.Length} candidates into the PC stream."
                 : "Render streaming camera is missing.",
-            candidateVisuals: visuals);
+            candidateVisuals: visuals,
+            placementZoneVisuals: placementZoneVisuals);
     }
 
     private CandidateVisualSummary[] BuildCandidateVisuals()
@@ -507,8 +586,119 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         }
 
         visual.hasBounds = true;
+        if (!TryProjectBounds(
+                bounds,
+                frustumPlanes,
+                out float xMin,
+                out float yMin,
+                out float xMax,
+                out float yMax,
+                out float depth))
+        {
+            return visual;
+        }
+
+        visual.depth = depth;
+        visual.visible = true;
+        visual.xMin = Mathf.Clamp01(xMin);
+        visual.yMin = Mathf.Clamp01(yMin);
+        visual.xMax = Mathf.Clamp01(xMax);
+        visual.yMax = Mathf.Clamp01(yMax);
+        return visual;
+    }
+
+    private PlacementZoneVisualSummary[] BuildPlacementZoneVisuals(
+        IEnumerable<SemanticObject> candidates)
+    {
+        if (renderStreamingCamera == null || candidates == null)
+        {
+            return Array.Empty<PlacementZoneVisualSummary>();
+        }
+
+        Plane[] frustumPlanes =
+            GeometryUtility.CalculateFrustumPlanes(renderStreamingCamera);
+        List<SemanticObject> candidateList = candidates
+            .Where(candidate => candidate != null)
+            .ToList();
+        ExperimentPlacementZone[] zones =
+            FindObjectsOfType<ExperimentPlacementZone>(true);
+        var visuals = new List<PlacementZoneVisualSummary>();
+        foreach (SemanticObject candidate in candidateList)
+        {
+            ExperimentPlacementZone zone = zones.FirstOrDefault(item =>
+                item != null && item.Accepts(candidate.StableId));
+            if (zone != null)
+            {
+                visuals.Add(
+                    ProjectPlacementZone(candidate, zone, frustumPlanes));
+            }
+        }
+        return visuals.ToArray();
+    }
+
+    private PlacementZoneVisualSummary[] BuildPlacementZoneVisualsForStep()
+    {
+        SemanticObject target = preparationSequence?.CurrentStep?.target == null
+            ? null
+            : preparationSequence.CurrentStep.target
+                .GetComponentInParent<SemanticObject>();
+        return target == null
+            ? Array.Empty<PlacementZoneVisualSummary>()
+            : BuildPlacementZoneVisuals(new[] { target });
+    }
+
+    private PlacementZoneVisualSummary ProjectPlacementZone(
+        SemanticObject candidate,
+        ExperimentPlacementZone zone,
+        Plane[] frustumPlanes)
+    {
+        var visual = new PlacementZoneVisualSummary
+        {
+            id = string.IsNullOrWhiteSpace(zone.ZoneId)
+                ? $"placement-{candidate?.StableId}"
+                : zone.ZoneId,
+            objectId = candidate?.StableId,
+            displayName = candidate?.DisplayName
+        };
+        if (zone == null || !zone.gameObject.activeInHierarchy ||
+            !TryGetPlacementZoneBounds(zone, out Bounds bounds))
+        {
+            return visual;
+        }
+
+        visual.hasBounds = true;
+        if (!TryProjectBounds(
+                bounds,
+                frustumPlanes,
+                out float xMin,
+                out float yMin,
+                out float xMax,
+                out float yMax,
+                out float depth))
+        {
+            return visual;
+        }
+
+        visual.depth = depth;
+        visual.visible = true;
+        visual.xMin = Mathf.Clamp01(xMin);
+        visual.yMin = Mathf.Clamp01(yMin);
+        visual.xMax = Mathf.Clamp01(xMax);
+        visual.yMax = Mathf.Clamp01(yMax);
+        return visual;
+    }
+
+    private bool TryProjectBounds(
+        Bounds bounds,
+        Plane[] frustumPlanes,
+        out float xMin,
+        out float yMin,
+        out float xMax,
+        out float yMax,
+        out float depth)
+    {
         Vector3 center = renderStreamingCamera.WorldToViewportPoint(bounds.center);
-        visual.depth = center.z;
+        depth = center.z;
 
         Vector3 min = bounds.min;
         Vector3 max = bounds.max;
@@ -524,10 +714,10 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             new Vector3(max.x, max.y, max.z)
         };
 
-        float xMin = float.PositiveInfinity;
-        float yMin = float.PositiveInfinity;
-        float xMax = float.NegativeInfinity;
-        float yMax = float.NegativeInfinity;
+        xMin = float.PositiveInfinity;
+        yMin = float.PositiveInfinity;
+        xMax = float.NegativeInfinity;
+        yMax = float.NegativeInfinity;
         int frontCornerCount = 0;
         foreach (Vector3 corner in corners)
         {
@@ -548,18 +738,34 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         bool intersectsViewport = frontCornerCount > 0 &&
                                   xMax >= 0f && xMin <= 1f &&
                                   yMax >= 0f && yMin <= 1f;
-        visual.visible = intersectsViewport &&
-                         GeometryUtility.TestPlanesAABB(frustumPlanes, bounds);
-        if (!visual.visible)
-        {
-            return visual;
-        }
+        return intersectsViewport &&
+               GeometryUtility.TestPlanesAABB(frustumPlanes, bounds);
+    }
 
-        visual.xMin = Mathf.Clamp01(xMin);
-        visual.yMin = Mathf.Clamp01(yMin);
-        visual.xMax = Mathf.Clamp01(xMax);
-        visual.yMax = Mathf.Clamp01(yMax);
-        return visual;
+    private static bool TryGetPlacementZoneBounds(
+        ExperimentPlacementZone zone,
+        out Bounds bounds)
+    {
+        bounds = default;
+        bool found = false;
+        foreach (Collider collider in
+                 zone.GetComponentsInChildren<Collider>(false))
+        {
+            if (collider == null || !collider.enabled)
+            {
+                continue;
+            }
+            if (!found)
+            {
+                bounds = collider.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(collider.bounds);
+            }
+        }
+        return found;
     }
 
     private static bool TryGetWorldBounds(
@@ -842,6 +1048,31 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             preparationSequence.StateChanged -= OnSequenceStateChanged;
             preparationSequence.StateChanged += OnSequenceStateChanged;
         }
+        if (interactionTracker != null)
+        {
+            interactionTracker.PlacementEvaluated -= OnPlacementEvaluated;
+            interactionTracker.PlacementEvaluated += OnPlacementEvaluated;
+        }
+        if (_copperTransfer != null)
+        {
+            _copperTransfer.StateChanged -= OnTransferStateChanged;
+            _copperTransfer.StateChanged += OnTransferStateChanged;
+        }
+        if (_copperMixing != null)
+        {
+            _copperMixing.StateChanged -= OnMixingStateChanged;
+            _copperMixing.StateChanged += OnMixingStateChanged;
+        }
+        if (_copperFiltration != null)
+        {
+            _copperFiltration.StateChanged -= OnFiltrationStateChanged;
+            _copperFiltration.StateChanged += OnFiltrationStateChanged;
+        }
+        if (experimentStartPose != null)
+        {
+            experimentStartPose.StateChanged -= OnRecenterStateChanged;
+            experimentStartPose.StateChanged += OnRecenterStateChanged;
+        }
     }
 
     private void Unsubscribe()
@@ -855,6 +1086,63 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         {
             preparationSequence.StateChanged -= OnSequenceStateChanged;
         }
+        if (interactionTracker != null)
+        {
+            interactionTracker.PlacementEvaluated -= OnPlacementEvaluated;
+        }
+        if (_copperTransfer != null)
+            _copperTransfer.StateChanged -= OnTransferStateChanged;
+        if (_copperMixing != null)
+            _copperMixing.StateChanged -= OnMixingStateChanged;
+        if (_copperFiltration != null)
+            _copperFiltration.StateChanged -= OnFiltrationStateChanged;
+        if (experimentStartPose != null)
+            experimentStartPose.StateChanged -= OnRecenterStateChanged;
+    }
+
+    private void OnRecenterStateChanged()
+    {
+        string status = experimentStartPose != null ? experimentStartPose.Status : "unavailable";
+        SendResponse("recenter_state", status == "waiting" || status == "ready" || status == "idle",
+            null, null, null, status);
+    }
+
+    private void OnTransferStateChanged()
+    {
+        _previewCandidates.Clear();
+        SendResponse("transfer_state", true, null, "forceps", null,
+            _copperTransfer.Stage.ToString(), null,
+            preparationSequence?.CurrentStepIndex ?? -1,
+            preparationSequence?.StepCount ?? 0);
+        if (objectRegistry != null)
+        {
+            objectRegistry.Refresh();
+            SendResponse("object_catalog", true, null, null, null,
+                "Experiment material state updated.", objectRegistry.GetCatalog());
+        }
+    }
+
+    private void OnMixingStateChanged()
+    {
+        if (_copperMixing == null) return;
+        if (_copperFiltration != null && _copperFiltration.CanRetry) return;
+        SendResponse("liquid_state", true, null, null, null, _copperMixing.Status);
+        if (_lastMixingStage == _copperMixing.Stage) return;
+        _lastMixingStage = _copperMixing.Stage;
+        objectRegistry?.Refresh();
+        if (objectRegistry != null)
+            SendResponse("object_catalog", true, null, null, null, "Liquid state updated.", objectRegistry.GetCatalog());
+    }
+
+    private void OnFiltrationStateChanged()
+    {
+        if (_copperFiltration == null || _copperFiltration.Stage == CopperSulfateFiltrationDetector.FiltrationStage.Waiting) return;
+        SendResponse("filtration_state", true, null, null, null, _copperFiltration.Status);
+        if (_lastFiltrationStage == _copperFiltration.Stage) return;
+        _lastFiltrationStage = _copperFiltration.Stage;
+        objectRegistry?.Refresh();
+        if (objectRegistry != null)
+            SendResponse("object_catalog", true, null, null, null, "Filtration state updated.", objectRegistry.GetCatalog());
     }
 
     private void OnSequenceStateChanged()
@@ -862,6 +1150,11 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         PreparationSequenceController.Step step = preparationSequence?.CurrentStep;
         bool isComplete = preparationSequence != null && preparationSequence.IsComplete;
         bool isRunning = preparationSequence != null && preparationSequence.IsRunning;
+        _previewCandidates.Clear();
+        if (isComplete)
+            stateController?.CompleteTrial();
+        else if (isRunning)
+            stateController?.BeginSequenceStep();
         experimentLogger?.LogEvent(
             isComplete ? "sequence_completed" : "sequence_state_changed",
             step?.id);
@@ -880,7 +1173,28 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             preparationSequence?.CurrentStepIndex ?? -1,
             preparationSequence?.StepCount ?? 0,
             step?.instruction,
-            isComplete);
+            isComplete,
+            placementZoneVisuals: BuildPlacementZoneVisualsForStep());
+    }
+
+    private void OnPlacementEvaluated(
+        ExperimentInteractionTracker.PlacementEvaluation evaluation)
+    {
+        if (evaluation == null)
+        {
+            return;
+        }
+
+        SendResponse(
+            "placement_evaluated",
+            evaluation.isCorrect,
+            null,
+            evaluation.releasedObjectId,
+            null,
+            evaluation.message,
+            null,
+            evaluation.stepIndex,
+            evaluation.stepCount);
     }
 
     private void OnTargetShown(GameObject target, GuidanceMode mode)
@@ -933,6 +1247,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         string instruction = null,
         bool sequenceComplete = false,
         CandidateVisualSummary[] candidateVisuals = null,
+        PlacementZoneVisualSummary[] placementZoneVisuals = null,
         string layoutDensity = null,
         int generatedCount = -1,
         int registryCount = -1)
@@ -966,13 +1281,30 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             candidates = candidates ?? Array.Empty<SemanticObjectSummary>(),
             candidateVisuals = candidateVisuals ??
                                Array.Empty<CandidateVisualSummary>(),
+            placementZoneVisuals = placementZoneVisuals ??
+                                   Array.Empty<PlacementZoneVisualSummary>(),
             stepIndex = stepIndex,
             stepCount = stepCount,
             instruction = instruction,
             sequenceComplete = sequenceComplete,
             generatedCount = generatedCount,
             registryCount = registryCount,
-            unityTime = Time.realtimeSinceStartupAsDouble
+            unityTime = Time.realtimeSinceStartupAsDouble,
+            mixingStage = _copperMixing != null ? _copperMixing.Stage.ToString() : null,
+            cylinderMl = _copperMixing != null ? _copperMixing.Cylinder.VolumeMl : 0f,
+            beakerMl = _copperMixing != null ? _copperMixing.Beaker.VolumeMl : 0f,
+            sourceMl = _copperMixing != null ? _copperMixing.Source.VolumeMl : 0f,
+            spilledMl = _copperMixing != null ? _copperMixing.SpilledMl : 0f,
+            mixingProgress = _copperMixing != null ? _copperMixing.Progress : 0f,
+            targetMl = _copperMixing != null ? _copperMixing.TargetMl : 0f,
+            toleranceMl = _copperMixing != null ? _copperMixing.ToleranceMl : 0f,
+            canRetryLiquid = _copperMixing != null && _copperMixing.CanRetry || _copperFiltration != null && _copperFiltration.CanRetry,
+            filtrationStage = _copperFiltration != null ? _copperFiltration.Stage.ToString() : null,
+            filtrateMl = _copperFiltration != null ? _copperFiltration.Receiver.VolumeMl : 0f,
+            dishMl = _copperFiltration != null ? _copperFiltration.Dish.VolumeMl : 0f,
+            filtrationInitialMl = _copperFiltration != null ? _copperFiltration.InitialMl : 0f,
+            filtrationMinimumMl = _copperFiltration != null ? _copperFiltration.MinimumMl : 0f,
+            filtrationSpilledMl = _copperFiltration != null ? _copperFiltration.AttemptSpilledMl : 0f
         };
         Send(JsonUtility.ToJson(response));
     }

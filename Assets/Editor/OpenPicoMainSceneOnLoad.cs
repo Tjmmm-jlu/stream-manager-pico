@@ -7,7 +7,7 @@ using UnityEngine.SceneManagement;
 public static class OpenPicoMainSceneOnLoad
 {
     private const string MainScenePath =
-        "Assets/Scenes/Preparation Experiment Scene.unity";
+        "Assets/Scenes/ContinuousExperiment_CopperSulfate_AStage.unity";
 
     private static double _openAt;
 
@@ -60,6 +60,11 @@ public static class OpenPicoMainSceneOnLoad
             return;
         }
 
+        if (SceneManager.GetActiveScene().path == CopperSulfateStationarySceneBuilder.ScenePath)
+        {
+            EditorApplication.update -= OpenWhenEditorIsStable;
+            return;
+        }
         OpenMainScene();
     }
 }

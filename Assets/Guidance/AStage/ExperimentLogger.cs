@@ -17,6 +17,9 @@ public sealed class ExperimentLogRecord
     public string targetId;
     public string[] candidateIds;
     public string message;
+    public string stepId;
+    public int stepIndex;
+    public string objectId;
 }
 
 [DisallowMultipleComponent]
@@ -25,6 +28,7 @@ public sealed class ExperimentLogger : MonoBehaviour
     [SerializeField] private ExperimentStateController stateController;
     [SerializeField] private string logFolderName = "ExperimentLogs";
     [SerializeField] private bool echoToConsole = true;
+    private PreparationSequenceController _sequence;
 
     private string _sessionId;
     private string _logFilePath;
@@ -45,6 +49,7 @@ public sealed class ExperimentLogger : MonoBehaviour
 
     private void Awake()
     {
+        _sequence = GetComponent<PreparationSequenceController>();
         if (stateController == null)
         {
             stateController = GetComponent<ExperimentStateController>();
@@ -73,7 +78,7 @@ public sealed class ExperimentLogger : MonoBehaviour
         Unsubscribe();
     }
 
-    public void LogEvent(string eventType, string message = null)
+    public void LogEvent(string eventType, string message = null, string objectId = null)
     {
         if (string.IsNullOrWhiteSpace(_logFilePath))
         {
@@ -94,7 +99,10 @@ public sealed class ExperimentLogger : MonoBehaviour
             targetId = stateController?.TargetId ?? string.Empty,
             candidateIds = stateController?.CandidateIds?.ToArray() ??
                            Array.Empty<string>(),
-            message = message ?? string.Empty
+            message = message ?? string.Empty,
+            stepId = _sequence?.CurrentStep?.id ?? string.Empty,
+            stepIndex = _sequence?.CurrentStepIndex ?? -1,
+            objectId = objectId ?? string.Empty
         };
 
         string json = JsonUtility.ToJson(record);

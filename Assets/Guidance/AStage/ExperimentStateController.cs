@@ -53,6 +53,13 @@ public sealed class ExperimentStateController : MonoBehaviour
         SetState(ExperimentTrialState.GeneratingCandidates);
     }
 
+    public void BeginSequenceStep()
+    {
+        targetId = string.Empty;
+        _candidateIds.Clear();
+        SetState(ExperimentTrialState.WaitingForInstruction, true);
+    }
+
     public void SetCandidates(IEnumerable<SemanticObject> candidates)
     {
         _candidateIds.Clear();

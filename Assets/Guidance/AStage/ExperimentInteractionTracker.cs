@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.XR.Interaction.Toolkit;
@@ -8,9 +9,28 @@ public sealed class ExperimentInteractionTracker : MonoBehaviour
 {
     [SerializeField] private ExperimentStateController stateController;
     [SerializeField] private ExperimentLogger experimentLogger;
+    [SerializeField] private PreparationSequenceController preparationSequence;
+    [SerializeField] private bool autoAdvanceSequence = true;
 
     private readonly List<XRGrabInteractable> _trackedObjects =
         new List<XRGrabInteractable>();
+
+    public event Action<PlacementEvaluation> PlacementEvaluated;
+
+    [Serializable]
+    public sealed class PlacementEvaluation
+    {
+        public int stepIndex;
+        public int stepCount;
+        public string expectedObjectId;
+        public string releasedObjectId;
+        public string expectedZoneId;
+        public string actualZoneId;
+        public bool objectMatches;
+        public bool insideExpectedZone;
+        public bool isCorrect;
+        public string message;
+    }
 
     private void Awake()
     {
@@ -21,6 +41,10 @@ public sealed class ExperimentInteractionTracker : MonoBehaviour
         if (experimentLogger == null)
         {
             experimentLogger = GetComponent<ExperimentLogger>();
+        }
+        if (preparationSequence == null)
+        {
+            preparationSequence = GetComponent<PreparationSequenceController>();
         }
     }
 
@@ -74,17 +98,18 @@ public sealed class ExperimentInteractionTracker : MonoBehaviour
             return;
         }
 
-        bool isExpected = stateController != null &&
+        string expectedObjectId = GetCurrentExpectedObjectId();
+        bool isExpected = !string.IsNullOrWhiteSpace(expectedObjectId) &&
                           string.Equals(
-                              stateController.TargetId,
+                              expectedObjectId,
                               semanticObject.StableId,
-                              System.StringComparison.OrdinalIgnoreCase);
+                              StringComparison.OrdinalIgnoreCase);
         experimentLogger?.LogEvent(
             isExpected ? "target_grab_started" : "other_object_grab_started",
             semanticObject.StableId);
         if (isExpected)
         {
-            stateController.MarkOperatorActing();
+            stateController?.MarkOperatorActing();
         }
     }
 
@@ -96,6 +121,117 @@ public sealed class ExperimentInteractionTracker : MonoBehaviour
         {
             experimentLogger?.LogEvent(
                 "object_released", semanticObject.StableId);
+
+            EvaluateReleasedObject(semanticObject);
         }
+    }
+
+    private void EvaluateReleasedObject(SemanticObject releasedObject)
+    {
+        if (preparationSequence == null ||
+            !preparationSequence.IsRunning ||
+            preparationSequence.CurrentStep == null)
+        {
+            return;
+        }
+
+        PreparationSequenceController.Step step =
+            preparationSequence.CurrentStep;
+        string expectedObjectId = GetStepTargetId(step);
+        bool objectMatches = string.Equals(
+            expectedObjectId,
+            releasedObject.StableId,
+            StringComparison.OrdinalIgnoreCase);
+
+        var evaluation = new PlacementEvaluation
+        {
+            stepIndex = preparationSequence.CurrentStepIndex,
+            stepCount = preparationSequence.StepCount,
+            expectedObjectId = expectedObjectId ?? string.Empty,
+            releasedObjectId = releasedObject.StableId,
+            expectedZoneId = string.Empty,
+            actualZoneId = string.Empty,
+            objectMatches = objectMatches,
+            // Kept true for compatibility with the existing data shape. The
+            // placement zone is no longer part of the task decision.
+            insideExpectedZone = true,
+            isCorrect = objectMatches,
+            message = BuildSelectionEvaluationMessage(
+                objectMatches,
+                expectedObjectId,
+                releasedObject.StableId)
+        };
+
+        experimentLogger?.LogEvent(
+            evaluation.isCorrect
+                ? "target_selection_correct"
+                : "target_selection_incorrect",
+            evaluation.message);
+        PlacementEvaluated?.Invoke(evaluation);
+
+        if (!evaluation.isCorrect)
+        {
+            return;
+        }
+
+        if (preparationSequence.CurrentStepRequiresAction)
+        {
+            experimentLogger?.LogEvent("sequence_action_pending", step.completionAction);
+            return;
+        }
+
+        stateController?.MarkOperatorActing();
+        experimentLogger?.LogEvent(
+            "sequence_step_completed",
+            $"stepIndex={evaluation.stepIndex};object={releasedObject.StableId};" +
+            $"zone={evaluation.expectedZoneId}");
+
+        if (autoAdvanceSequence)
+        {
+            preparationSequence.NextStep();
+        }
+    }
+
+    private string GetCurrentExpectedObjectId()
+    {
+        if (preparationSequence != null &&
+            preparationSequence.IsRunning &&
+            preparationSequence.CurrentStep != null)
+        {
+            return GetStepTargetId(preparationSequence.CurrentStep);
+        }
+
+        return stateController?.TargetId;
+    }
+
+    private static string GetStepTargetId(
+        PreparationSequenceController.Step step)
+    {
+        if (step == null)
+        {
+            return string.Empty;
+        }
+
+        SemanticObject semanticObject = step.target == null
+            ? null
+            : step.target.GetComponentInParent<SemanticObject>();
+        return semanticObject != null &&
+               !string.IsNullOrWhiteSpace(semanticObject.StableId)
+            ? semanticObject.StableId
+            : step.id;
+    }
+
+    private static string BuildSelectionEvaluationMessage(
+        bool objectMatches,
+        string expectedObjectId,
+        string releasedObjectId)
+    {
+        if (objectMatches)
+        {
+            return $"Target selected: {releasedObjectId}.";
+        }
+
+        return $"Wrong target: expected {expectedObjectId}, " +
+               $"released {releasedObjectId}.";
     }
 }

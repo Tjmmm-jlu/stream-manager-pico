@@ -17,9 +17,15 @@ EditorBuildSettings:
   - enabled: 0
     path: Assets/Scenes/Preparation Experiment Scene_AStage.unity
     guid: 9b0fa5b51f224754dbfc3abdab5d3f74
-  - enabled: 1
+  - enabled: 0
     path: Assets/Scenes/ContinuousExperiment_AStage.unity
     guid: c6a63f2009596cc4b89650efaf0776af
+  - enabled: 0
+    path: Assets/Scenes/ContinuousExperiment_CopperSulfate_AStage.unity
+    guid: d3a7771f3c4dc9b47aab5f4c8f952e8a
+  - enabled: 1
+    path: Assets/Scenes/ContinuousExperiment_CopperSulfate_Stationary.unity
+    guid: 3b975fb3d94e19345a587f50d755af07
   m_configObjects:
     Unity.XR.PXR.Settings: {fileID: 11400000, guid: ad74b5a1bfcd19647a7271263659ad9e, type: 2}
     com.unity.input.settings: {fileID: 11400000, guid: 044a5b7e82530cf41b416e6069b6c67b, type: 2}

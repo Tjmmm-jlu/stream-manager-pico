@@ -10,6 +10,7 @@ public sealed class PreparationSequenceController : MonoBehaviour
         public string id;
         [TextArea] public string instruction;
         public GameObject target;
+        public string completionAction;
     }
 
     [SerializeField] private GuidanceManager guidanceManager;
@@ -19,14 +20,23 @@ public sealed class PreparationSequenceController : MonoBehaviour
 
     private int _currentStepIndex = -1;
     private bool _isRunning;
+    private readonly HashSet<int> _completedActions = new HashSet<int>();
 
     public event Action StateChanged;
+    public event Action Resetting;
 
     public int CurrentStepIndex => _currentStepIndex;
     public int StepCount => steps.Count;
     public IReadOnlyList<Step> Steps => steps;
     public bool IsRunning => _isRunning;
     public bool IsComplete => !_isRunning && _currentStepIndex >= steps.Count;
+    public bool CurrentStepRequiresAction =>
+        CurrentStep != null && !string.IsNullOrWhiteSpace(CurrentStep.completionAction);
+    public bool CanAdvance => IsRunning &&
+        (!CurrentStepRequiresAction || _completedActions.Contains(_currentStepIndex));
+    public bool HasPendingActions => steps.Exists(step =>
+        !string.IsNullOrWhiteSpace(step.completionAction) &&
+        !_completedActions.Contains(steps.IndexOf(step)));
     public Step CurrentStep =>
         _currentStepIndex >= 0 && _currentStepIndex < steps.Count
             ? steps[_currentStepIndex]
@@ -70,6 +80,7 @@ public sealed class PreparationSequenceController : MonoBehaviour
         showTargetAutomatically = autoShowTarget;
         _currentStepIndex = -1;
         _isRunning = false;
+        _completedActions.Clear();
     }
 
     public bool StartSequence()
@@ -79,6 +90,7 @@ public sealed class PreparationSequenceController : MonoBehaviour
             return false;
         }
 
+        ResetSequence();
         _currentStepIndex = 0;
         _isRunning = true;
         ShowCurrentStep();
@@ -91,6 +103,17 @@ public sealed class PreparationSequenceController : MonoBehaviour
         {
             return false;
         }
+
+        for (int previous = 0; previous < index; previous++)
+        {
+            if (!string.IsNullOrWhiteSpace(steps[previous].completionAction) &&
+                !_completedActions.Contains(previous))
+                return false;
+        }
+        // Replaying an action would otherwise disagree with the material state.
+        if (!string.IsNullOrWhiteSpace(steps[index].completionAction) &&
+            _completedActions.Contains(index))
+            return false;
 
         _currentStepIndex = index;
         _isRunning = true;
@@ -105,10 +128,12 @@ public sealed class PreparationSequenceController : MonoBehaviour
             return StartSequence();
         }
 
+        if (!CanAdvance)
+            return false;
+
         if (_currentStepIndex + 1 >= steps.Count)
         {
-            CompleteSequence();
-            return true;
+            return CompleteSequence();
         }
 
         _currentStepIndex++;
@@ -123,14 +148,22 @@ public sealed class PreparationSequenceController : MonoBehaviour
             return false;
         }
 
-        _currentStepIndex = Mathf.Clamp(_currentStepIndex - 1, 0, steps.Count - 1);
-        _isRunning = true;
-        ShowCurrentStep();
-        return true;
+        return ShowStep(Mathf.Clamp(_currentStepIndex - 1, 0, steps.Count - 1));
     }
 
-    public void CompleteSequence()
+    public bool CompleteAction(string action)
     {
+        if (!IsRunning || !CurrentStepRequiresAction ||
+            !string.Equals(CurrentStep.completionAction, action, StringComparison.Ordinal) ||
+            !_completedActions.Add(_currentStepIndex))
+            return false;
+        return NextStep();
+    }
+
+    public bool CompleteSequence()
+    {
+        if (HasPendingActions)
+            return false;
         guidanceManager?.ClearTarget();
         _currentStepIndex = steps.Count;
         _isRunning = false;
@@ -138,13 +171,16 @@ public sealed class PreparationSequenceController : MonoBehaviour
         Debug.Log(
             $"[Preparation] Sequence completed at " +
             $"{Time.realtimeSinceStartupAsDouble:F6}.");
+        return true;
     }
 
     public void ResetSequence()
     {
+        _isRunning = false;
+        Resetting?.Invoke();
         guidanceManager?.ClearTarget();
         _currentStepIndex = -1;
-        _isRunning = false;
+        _completedActions.Clear();
         StateChanged?.Invoke();
     }
 
