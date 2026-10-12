@@ -4,6 +4,7 @@ using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.XR;
 using UnityEngine.SceneManagement;
 using UnityEngine.XR.Interaction.Toolkit.Inputs.Readers;
+using UnityEngine.XR.Interaction.Toolkit.Interactables;
 using UnityEngine.XR.Interaction.Toolkit.Interactors;
 
 public static class PicoHandPinchGrabBootstrap
@@ -60,8 +61,15 @@ public static class PicoHandPinchGrabBootstrap
             "RightHand",
             InteractorHandedness.Right);
 
+        foreach (var grab in scene.GetRootGameObjects()
+                     .SelectMany(root => root.GetComponentsInChildren<XRGrabInteractable>(true)))
+        {
+            if (grab.GetComponentInParent<SemanticObject>() != null)
+                GetOrAdd<ExperimentGrabReturn>(grab.gameObject).Initialize();
+        }
+
         Debug.Log(
-            "[PICO Hand Grab] Hand pinch grab active; controller grab disabled.");
+            "[PICO Hand Grab] Hold thumb-index pinch to grab; open fingers to release and return home.");
         return true;
     }
 
@@ -101,8 +109,9 @@ public static class PicoHandPinchGrabBootstrap
         interactor.physicsLayerMask = 1 << 0;
         interactor.physicsTriggerInteraction = QueryTriggerInteraction.Ignore;
         interactor.selectActionTrigger =
-            XRBaseInputInteractor.InputTriggerType.StateChange;
+            XRBaseInputInteractor.InputTriggerType.State;
         interactor.selectInput = CreatePinchInput(objectName, pinchInput);
+        pinchInput.BindInteractor(interactor);
         interactor.activateInput.inputSourceMode =
             XRInputButtonReader.InputSourceMode.Unused;
 

@@ -60,7 +60,8 @@ public static class OpenPicoMainSceneOnLoad
             return;
         }
 
-        if (SceneManager.GetActiveScene().path == CopperSulfateStationarySceneBuilder.ScenePath)
+        if (SceneManager.GetActiveScene().path == CopperSulfateStationarySceneBuilder.ScenePath ||
+            SceneManager.GetActiveScene().path == CopperSulfateLargeTableSceneBuilder.ScenePath)
         {
             EditorApplication.update -= OpenWhenEditorIsStable;
             return;

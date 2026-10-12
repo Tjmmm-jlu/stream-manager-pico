@@ -110,11 +110,31 @@ public sealed class ExperimentInteractionTracker : MonoBehaviour
         if (isExpected)
         {
             stateController?.MarkOperatorActing();
+            TryCompleteGrabStep();
+        }
+    }
+
+    // “拿起 X”类元步骤（completionAction == "grab"）在目标物体被抓取时完成。
+    private void TryCompleteGrabStep()
+    {
+        if (preparationSequence == null || !preparationSequence.IsRunning)
+        {
+            return;
+        }
+
+        PreparationSequenceController.Step step =
+            preparationSequence.CurrentStep;
+        if (step != null && string.Equals(
+                step.completionAction, "grab", StringComparison.Ordinal))
+        {
+            preparationSequence.CompleteAction("grab");
         }
     }
 
     private void OnGrabEnded(SelectExitEventArgs args)
     {
+        // Assembly, resets and interrupted tracking are not user-confirmed releases.
+        if (args.isCanceled) return;
         SemanticObject semanticObject =
             args.interactableObject.transform.GetComponentInParent<SemanticObject>();
         if (semanticObject != null)
@@ -215,10 +235,17 @@ public sealed class ExperimentInteractionTracker : MonoBehaviour
         SemanticObject semanticObject = step.target == null
             ? null
             : step.target.GetComponentInParent<SemanticObject>();
-        return semanticObject != null &&
-               !string.IsNullOrWhiteSpace(semanticObject.StableId)
-            ? semanticObject.StableId
-            : step.id;
+        if (semanticObject != null &&
+            !string.IsNullOrWhiteSpace(semanticObject.StableId))
+        {
+            return semanticObject.StableId;
+        }
+        // 元步骤通过 targetId（stableId）声明目标，无需场景对象引用。
+        if (!string.IsNullOrWhiteSpace(step.targetId))
+        {
+            return step.targetId.Trim();
+        }
+        return step.id;
     }
 
     private static string BuildSelectionEvaluationMessage(

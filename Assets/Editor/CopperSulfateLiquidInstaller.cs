@@ -33,6 +33,8 @@ public static class CopperSulfateLiquidInstaller
             }
             else if (command == "polish-rod") PolishRod();
             else if (command == "tolerance10") ApplyTolerance10();
+            else if (command == "stirring2") ApplyStirringSeconds();
+            else if (command == "build-stirring") Build("Builds/CopperSulfate-StirringFix.apk");
             else if (command == "build") Build();
             else throw new InvalidOperationException("Unknown liquid command: " + command);
         }
@@ -271,10 +273,9 @@ public static class CopperSulfateLiquidInstaller
         return material;
     }
 
-    private static void Build()
+    private static void Build(string path = "Builds/CopperSulfate-SeatedLiquids-PourFix.apk")
     {
         Directory.CreateDirectory("Builds");
-        string path = "Builds/CopperSulfate-SeatedLiquids-PourFix.apk";
         var result = BuildPipeline.BuildPlayer(new BuildPlayerOptions { scenes = new[] { ScenePath },
             locationPathName = path, target = BuildTarget.Android, options = BuildOptions.Development });
         File.WriteAllText("Temp/CopperSulfateLiquids.build.txt", result.summary.result + "\n" + path +
@@ -336,5 +337,23 @@ public static class CopperSulfateLiquidInstaller
         EditorSceneManager.MarkSceneDirty(scene);
         if (!EditorSceneManager.SaveScene(scene)) throw new IOException("Could not save tolerance change.");
         File.WriteAllText("Temp/CopperSulfateLiquids.result.txt", "Tolerance is 10 mL. Backup: " + backup);
+    }
+
+    private static void ApplyStirringSeconds()
+    {
+        Scene scene = SceneManager.GetActiveScene();
+        if (scene.path != ScenePath || EditorApplication.isPlayingOrWillChangePlaymode)
+            throw new InvalidOperationException("Open the stationary scene outside Play Mode first.");
+        string backup = "MigrationBackups/BeforeStirringSettings_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        Directory.CreateDirectory(backup);
+        File.Copy(ScenePath, Path.Combine(backup, Path.GetFileName(ScenePath)));
+        if (scene.isDirty) EditorSceneManager.SaveScene(scene, Path.Combine(backup, "UnsavedScene.unity"), true);
+        var mixing = scene.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<CopperSulfateMixingDetector>(true)).Single();
+        var serialized = new SerializedObject(mixing);
+        serialized.FindProperty("stirringSeconds").floatValue = 2f;
+        serialized.ApplyModifiedProperties();
+        EditorSceneManager.MarkSceneDirty(scene);
+        if (!EditorSceneManager.SaveScene(scene)) throw new IOException("Could not save stirring duration.");
+        File.WriteAllText("Temp/CopperSulfateLiquids.result.txt", "Effective stirring duration is 2 seconds. Backup: " + backup);
     }
 }

@@ -23,6 +23,20 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public string[] candidateIds;
         public int stepIndex;
         public int seed;
+        public string spec;
+        public int variantIndex = -1;
+        public int variantSeed = -1;
+    }
+
+    [Serializable]
+    private sealed class ObjectPhotoPayload
+    {
+        public string type;
+        public bool ok;
+        public string id;
+        public string photo;
+        public string message;
+        public double unityTime;
     }
 
     [Serializable]
@@ -74,8 +88,16 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public int stepCount;
         public string instruction;
         public bool sequenceComplete;
+        public bool requiresConfirmation;
         public int generatedCount;
         public int registryCount;
+        public string[] supportedLayoutDensities;
+        public string layoutProfile;
+        public int layoutSeed;
+        public bool layoutLocked;
+        public string layoutSource;
+        public int runtimeVariant = -1;
+        public int runtimeSeed = -1;
         public double unityTime;
         public string mixingStage;
         public float cylinderMl;
@@ -87,11 +109,20 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         public float toleranceMl;
         public bool canRetryLiquid;
         public string filtrationStage;
+        public bool filtrationFunnelMounted;
+        public bool filtrationReceiverMounted;
         public float filtrateMl;
         public float dishMl;
         public float filtrationInitialMl;
         public float filtrationMinimumMl;
         public float filtrationSpilledMl;
+        public string heatingStage;
+        public float heatingProgress;
+        public float heatingTargetMl;
+        public float coolingRemainingSeconds;
+        public float evaporatedMl;
+        public bool lampLit;
+        public bool lampCovered;
     }
 
     [Header("Existing guidance")]
@@ -103,10 +134,13 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     [SerializeField] private ExperimentStateController stateController;
     [SerializeField] private ExperimentLogger experimentLogger;
     [SerializeField] private ExperimentDistractorLayoutGenerator layoutGenerator;
+    [SerializeField] private ExperimentRuntimeLayoutLoader runtimeLayoutLoader;
     [SerializeField] private ExperimentInteractionTracker interactionTracker;
     private CopperSulfateTransferDetector _copperTransfer;
     private CopperSulfateMixingDetector _copperMixing;
     private CopperSulfateFiltrationDetector _copperFiltration;
+    private CopperSulfateHeatingDetector _copperHeating;
+    private string _lastHeatingStatus;
     private CopperSulfateFiltrationDetector.FiltrationStage _lastFiltrationStage;
     private CopperSulfateMixingDetector.MixingStage _lastMixingStage;
     [SerializeField] private PicoExperimentStartPose experimentStartPose;
@@ -189,12 +223,16 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         layoutGenerator = layoutGenerator != null
             ? layoutGenerator
             : FindObjectOfType<ExperimentDistractorLayoutGenerator>(true);
+        runtimeLayoutLoader = runtimeLayoutLoader != null
+            ? runtimeLayoutLoader
+            : FindObjectOfType<ExperimentRuntimeLayoutLoader>(true);
         interactionTracker = interactionTracker != null
             ? interactionTracker
             : GetComponent<ExperimentInteractionTracker>();
         _copperTransfer = GetComponent<CopperSulfateTransferDetector>();
         _copperMixing = GetComponent<CopperSulfateMixingDetector>();
         _copperFiltration = GetComponent<CopperSulfateFiltrationDetector>();
+        _copperHeating = GetComponent<CopperSulfateHeatingDetector>();
         renderStreamingCamera = ResolveRenderStreamingCamera();
         objectRegistry?.Refresh();
     }
@@ -283,6 +321,12 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             case "set_scene_density":
                 ApplyLayoutDensity(command);
                 break;
+            case "apply_layout_spec":
+                ApplyRuntimeLayoutSpec(command);
+                break;
+            case "clear_layout_spec":
+                ClearRuntimeLayoutSpec(command);
+                break;
             case "start_trial":
                 StartTrial(command);
                 break;
@@ -291,6 +335,9 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                 break;
             case "get_object_catalog":
                 SendObjectCatalog(command);
+                break;
+            case "request_object_photos":
+                SendObjectPhotos(command);
                 break;
             case "preview_candidates":
                 SetCandidatePreview(command);
@@ -357,7 +404,11 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                 StartSequence(command);
                 break;
             case "retry_liquid_stage":
-                if (_copperFiltration != null && _copperFiltration.CanRetry)
+                if (_copperHeating != null && _copperHeating.CanRetry)
+                {
+                    if (!_copperHeating.RetryCurrentStage()) SendSequenceError(command, "The heating stage is not ready.");
+                }
+                else if (_copperFiltration != null && _copperFiltration.CanRetry)
                 {
                     if (!_copperFiltration.RetryCurrentStage()) SendSequenceError(command, "The filtration stage is not ready.");
                 }
@@ -437,6 +488,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         OnRecenterStateChanged();
         OnMixingStateChanged();
         OnFiltrationStateChanged();
+        OnHeatingStateChanged();
     }
 
     private void StartTrial(GuidanceCommand command)
@@ -498,6 +550,57 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             null,
             $"Scene catalog contains {objectRegistry.Count} objects.",
             objectRegistry.GetCatalog());
+    }
+
+    private void SendObjectPhotos(GuidanceCommand command)
+    {
+        if (!EnsureRegistry(command))
+        {
+            return;
+        }
+
+        string[] requestedIds = command.candidateIds ?? Array.Empty<string>();
+        int sentCount = 0;
+        foreach (string rawId in requestedIds)
+        {
+            if (string.IsNullOrWhiteSpace(rawId))
+            {
+                continue;
+            }
+            string id = rawId.Trim();
+            if (!objectRegistry.TryGet(id, out SemanticObject target))
+            {
+                SendObjectPhoto(id, null, $"Unknown object id: {id}");
+                continue;
+            }
+            string dataUrl = SemanticPhotoBooth.GetPhotoDataUrl(target);
+            SendObjectPhoto(
+                id,
+                dataUrl,
+                dataUrl != null
+                    ? null
+                    : "No photo available for this object.");
+            sentCount++;
+        }
+        Debug.Log(
+            $"[Guidance] Requested object photos={requestedIds.Length} sent={sentCount}");
+    }
+
+    private void SendObjectPhoto(string id, string dataUrl, string message)
+    {
+        if (!IsConnected)
+        {
+            return;
+        }
+        Send(JsonUtility.ToJson(new ObjectPhotoPayload
+        {
+            type = "object_photo",
+            ok = !string.IsNullOrEmpty(dataUrl),
+            id = id,
+            photo = dataUrl,
+            message = message,
+            unityTime = Time.realtimeSinceStartupAsDouble
+        }));
     }
 
     private void SetCandidatePreview(GuidanceCommand command)
@@ -638,10 +741,12 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
 
     private PlacementZoneVisualSummary[] BuildPlacementZoneVisualsForStep()
     {
-        SemanticObject target = preparationSequence?.CurrentStep?.target == null
+        GameObject stepTarget = preparationSequence?.CurrentStep == null
             ? null
-            : preparationSequence.CurrentStep.target
-                .GetComponentInParent<SemanticObject>();
+            : preparationSequence.ResolveTarget(preparationSequence.CurrentStep);
+        SemanticObject target = stepTarget == null
+            ? null
+            : stepTarget.GetComponentInParent<SemanticObject>();
         return target == null
             ? Array.Empty<PlacementZoneVisualSummary>()
             : BuildPlacementZoneVisuals(new[] { target });
@@ -890,6 +995,55 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
                 : $"Unknown guidance mode: {command.mode}");
     }
 
+    private void ApplyRuntimeLayoutSpec(GuidanceCommand command)
+    {
+        if (runtimeLayoutLoader == null)
+            runtimeLayoutLoader = FindObjectOfType<ExperimentRuntimeLayoutLoader>(true);
+        if (runtimeLayoutLoader == null)
+        {
+            SendError(command, "ExperimentRuntimeLayoutLoader is missing in the scene.");
+            return;
+        }
+
+        if (!runtimeLayoutLoader.TryApplySpec(command.spec, command.variantIndex, command.variantSeed, out string layoutError))
+        {
+            experimentLogger?.LogEvent("runtime_layout_failed", layoutError);
+            SendResponse("layout_spec_applied", false, command, null, null, layoutError);
+            return;
+        }
+
+        _previewCandidates.Clear();
+        guidanceManager?.ClearTarget();
+        objectRegistry?.Refresh();
+        experimentLogger?.LogEvent("runtime_layout_applied_ack",
+            $"variant={runtimeLayoutLoader.ActiveIndex};seed={runtimeLayoutLoader.ActiveSeed};registry={objectRegistry?.Count ?? 0}");
+        SendResponse("layout_spec_applied", true, command, null, null,
+            $"Runtime layout applied: variant {runtimeLayoutLoader.ActiveIndex}, seed {runtimeLayoutLoader.ActiveSeed}.");
+    }
+
+    private void ClearRuntimeLayoutSpec(GuidanceCommand command)
+    {
+        if (runtimeLayoutLoader == null)
+            runtimeLayoutLoader = FindObjectOfType<ExperimentRuntimeLayoutLoader>(true);
+        if (runtimeLayoutLoader == null)
+        {
+            SendError(command, "ExperimentRuntimeLayoutLoader is missing in the scene.");
+            return;
+        }
+
+        if (!runtimeLayoutLoader.ClearRuntimeLayout(out string layoutError))
+        {
+            SendResponse("layout_spec_cleared", false, command, null, null, layoutError);
+            return;
+        }
+
+        _previewCandidates.Clear();
+        guidanceManager?.ClearTarget();
+        objectRegistry?.Refresh();
+        experimentLogger?.LogEvent("runtime_layout_cleared_ack", "source=web");
+        SendResponse("layout_spec_cleared", true, command, null, null, "Runtime layout cleared; baked layout restored.");
+    }
+
     private void ApplyLayoutDensity(GuidanceCommand command)
     {
         if (layoutGenerator == null)
@@ -915,7 +1069,13 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         int seed = command.seed == 0
             ? layoutGenerator.RandomSeed
             : command.seed;
-        layoutGenerator.ApplySelection(selection, "pc_browser", seed);
+        if (!layoutGenerator.TryApplySelection(selection, "pc_browser", seed, out string layoutError))
+        {
+            SendResponse("layout_density_applied", false, command, null, null, layoutError);
+            return;
+        }
+        _previewCandidates.Clear();
+        guidanceManager?.ClearTarget();
         objectRegistry?.Refresh();
 
         int generatedCount = layoutGenerator.GeneratedCount;
@@ -1068,6 +1228,11 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             _copperFiltration.StateChanged -= OnFiltrationStateChanged;
             _copperFiltration.StateChanged += OnFiltrationStateChanged;
         }
+        if (_copperHeating != null)
+        {
+            _copperHeating.StateChanged -= OnHeatingStateChanged;
+            _copperHeating.StateChanged += OnHeatingStateChanged;
+        }
         if (experimentStartPose != null)
         {
             experimentStartPose.StateChanged -= OnRecenterStateChanged;
@@ -1096,6 +1261,8 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             _copperMixing.StateChanged -= OnMixingStateChanged;
         if (_copperFiltration != null)
             _copperFiltration.StateChanged -= OnFiltrationStateChanged;
+        if (_copperHeating != null)
+            _copperHeating.StateChanged -= OnHeatingStateChanged;
         if (experimentStartPose != null)
             experimentStartPose.StateChanged -= OnRecenterStateChanged;
     }
@@ -1125,6 +1292,7 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     private void OnMixingStateChanged()
     {
         if (_copperMixing == null) return;
+        if (_copperHeating != null && _copperHeating.HasState) return;
         if (_copperFiltration != null && _copperFiltration.CanRetry) return;
         SendResponse("liquid_state", true, null, null, null, _copperMixing.Status);
         if (_lastMixingStage == _copperMixing.Stage) return;
@@ -1137,12 +1305,23 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
     private void OnFiltrationStateChanged()
     {
         if (_copperFiltration == null || _copperFiltration.Stage == CopperSulfateFiltrationDetector.FiltrationStage.Waiting) return;
+        if (_copperHeating != null && _copperHeating.HasState) return;
         SendResponse("filtration_state", true, null, null, null, _copperFiltration.Status);
         if (_lastFiltrationStage == _copperFiltration.Stage) return;
         _lastFiltrationStage = _copperFiltration.Stage;
         objectRegistry?.Refresh();
         if (objectRegistry != null)
             SendResponse("object_catalog", true, null, null, null, "Filtration state updated.", objectRegistry.GetCatalog());
+    }
+
+    private void OnHeatingStateChanged()
+    {
+        if (_copperHeating == null || !_copperHeating.HasState) return;
+        SendResponse("heating_state", true, null, null, null, _copperHeating.Status);
+        if (_lastHeatingStatus == _copperHeating.Status) return;
+        _lastHeatingStatus = _copperHeating.Status; objectRegistry?.Refresh();
+        if (objectRegistry != null)
+            SendResponse("object_catalog", true, null, null, null, "Heating state updated.", objectRegistry.GetCatalog());
     }
 
     private void OnSequenceStateChanged()
@@ -1158,12 +1337,15 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
         experimentLogger?.LogEvent(
             isComplete ? "sequence_completed" : "sequence_state_changed",
             step?.id);
+        GameObject stepTarget = preparationSequence != null && step != null
+            ? preparationSequence.ResolveTarget(step)
+            : null;
         SendResponse(
             "sequence_state",
             true,
             null,
-            step?.target != null ? GetTargetId(step.target) : null,
-            step?.target != null ? step.target.name : null,
+            stepTarget != null ? GetTargetId(stepTarget) : null,
+            stepTarget != null ? stepTarget.name : null,
             isComplete
                 ? "Preparation sequence completed."
                 : isRunning
@@ -1269,7 +1451,15 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             mode = guidanceManager != null
                 ? GuidanceManager.GetModeName(guidanceManager.ActiveMode)
                 : "none",
-            density = layoutDensity,
+            density = layoutDensity ?? layoutGenerator?.CurrentSelection.ToString().ToLowerInvariant(),
+            supportedLayoutDensities = layoutGenerator?.PairedLayout != null
+                ? new[] { "low", "high" } : new[] { "low", "medium", "high", "clear" },
+            layoutProfile = layoutGenerator?.PairedLayout?.ProfileId,
+            layoutSeed = layoutGenerator != null ? layoutGenerator.RandomSeed : 0,
+            layoutLocked = layoutGenerator?.PairedLayout != null && layoutGenerator.PairedLayout.IsLocked,
+            layoutSource = runtimeLayoutLoader != null && runtimeLayoutLoader.HasRuntimeLayout ? "runtime" : "baked",
+            runtimeVariant = runtimeLayoutLoader != null ? runtimeLayoutLoader.ActiveIndex : -1,
+            runtimeSeed = runtimeLayoutLoader != null ? runtimeLayoutLoader.ActiveSeed : -1,
             trialId = trialId,
             state = stateController != null
                 ? stateController.CurrentState.ToString()
@@ -1287,8 +1477,10 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             stepCount = stepCount,
             instruction = instruction,
             sequenceComplete = sequenceComplete,
-            generatedCount = generatedCount,
-            registryCount = registryCount,
+            requiresConfirmation = preparationSequence == null ||
+                preparationSequence.CurrentStepRequiresConfirmation,
+            generatedCount = generatedCount >= 0 ? generatedCount : layoutGenerator?.GeneratedCount ?? 0,
+            registryCount = registryCount >= 0 ? registryCount : objectRegistry?.Count ?? 0,
             unityTime = Time.realtimeSinceStartupAsDouble,
             mixingStage = _copperMixing != null ? _copperMixing.Stage.ToString() : null,
             cylinderMl = _copperMixing != null ? _copperMixing.Cylinder.VolumeMl : 0f,
@@ -1298,13 +1490,23 @@ public sealed class GuidanceDataChannelReceiver : DataChannelBase
             mixingProgress = _copperMixing != null ? _copperMixing.Progress : 0f,
             targetMl = _copperMixing != null ? _copperMixing.TargetMl : 0f,
             toleranceMl = _copperMixing != null ? _copperMixing.ToleranceMl : 0f,
-            canRetryLiquid = _copperMixing != null && _copperMixing.CanRetry || _copperFiltration != null && _copperFiltration.CanRetry,
+            canRetryLiquid = _copperMixing != null && _copperMixing.CanRetry || _copperFiltration != null && _copperFiltration.CanRetry ||
+                _copperHeating != null && _copperHeating.CanRetry,
             filtrationStage = _copperFiltration != null ? _copperFiltration.Stage.ToString() : null,
+            filtrationFunnelMounted = _copperFiltration != null && _copperFiltration.Attached,
+            filtrationReceiverMounted = _copperFiltration != null && _copperFiltration.ReceiverMounted,
             filtrateMl = _copperFiltration != null ? _copperFiltration.Receiver.VolumeMl : 0f,
             dishMl = _copperFiltration != null ? _copperFiltration.Dish.VolumeMl : 0f,
             filtrationInitialMl = _copperFiltration != null ? _copperFiltration.InitialMl : 0f,
             filtrationMinimumMl = _copperFiltration != null ? _copperFiltration.MinimumMl : 0f,
-            filtrationSpilledMl = _copperFiltration != null ? _copperFiltration.AttemptSpilledMl : 0f
+            filtrationSpilledMl = _copperFiltration != null ? _copperFiltration.AttemptSpilledMl : 0f,
+            heatingStage = _copperHeating != null ? _copperHeating.Stage.ToString() : null,
+            heatingProgress = _copperHeating != null ? _copperHeating.Progress : 0f,
+            heatingTargetMl = _copperHeating != null ? _copperHeating.TargetMl : 0f,
+            coolingRemainingSeconds = _copperHeating != null ? _copperHeating.CoolingRemainingSeconds : 0f,
+            evaporatedMl = _copperHeating != null ? _copperHeating.EvaporatedMl : 0f,
+            lampLit = _copperHeating != null && _copperHeating.Lit,
+            lampCovered = _copperHeating != null && _copperHeating.Covered
         };
         Send(JsonUtility.ToJson(response));
     }

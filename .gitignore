@@ -46,3 +46,5 @@ sysinfo.txt
 *.tmp
 *.temp
 *.bak
+# Local scene/file backups (not for version control)
+MigrationBackups/

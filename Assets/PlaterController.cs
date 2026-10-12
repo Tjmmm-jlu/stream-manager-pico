@@ -81,8 +81,11 @@ public class PlayerController : MonoBehaviour
         Vector2 mousePosition = Mouse.current.position.ReadValue();
         GetInputResolution(out int actualWidth, out int actualHeight);
 
-        float viewportX = mousePosition.x / actualWidth;
-        float viewportY = 1f - mousePosition.y / actualHeight;
+        // 浏览器端已完成坐标换算（PointerCorrector：元素坐标 → 视频内容像素，
+        // 且 y 已翻转为 Unity 屏幕坐标系/左下原点），此处只需归一化。
+        // 注意：不可再次翻转 y，否则射线会垂直镜像。
+        float viewportX = Mathf.Clamp01(mousePosition.x / actualWidth);
+        float viewportY = Mathf.Clamp01(mousePosition.y / actualHeight);
         Ray ray = renderStreamingCamera.ViewportPointToRay(
             new Vector3(viewportX, viewportY, 0f));
         Debug.DrawRay(

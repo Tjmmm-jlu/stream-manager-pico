@@ -10,6 +10,10 @@ public sealed class PreparationSequenceController : MonoBehaviour
         public string id;
         [TextArea] public string instruction;
         public GameObject target;
+        // 元步骤可直接用 stableId 声明目标，无需场景对象引用；target 非空时优先。
+        public string targetId;
+        // false = 执行/等待步：无需指导者逐条指代，等待完成信号后自动推进。
+        public bool requiresConfirmation = true;
         public string completionAction;
     }
 
@@ -41,6 +45,36 @@ public sealed class PreparationSequenceController : MonoBehaviour
         _currentStepIndex >= 0 && _currentStepIndex < steps.Count
             ? steps[_currentStepIndex]
             : null;
+
+    /// <summary>执行/等待步（requiresConfirmation=false）不需要指导者逐条指代。</summary>
+    public bool CurrentStepRequiresConfirmation =>
+        CurrentStep == null || CurrentStep.requiresConfirmation;
+
+    /// <summary>解析步骤目标：优先场景引用，其次按 targetId 从语义目录解析。</summary>
+    public GameObject ResolveTarget(Step step)
+    {
+        if (step == null)
+        {
+            return null;
+        }
+        if (step.target != null)
+        {
+            return step.target;
+        }
+        if (string.IsNullOrWhiteSpace(step.targetId))
+        {
+            return null;
+        }
+
+        SceneObjectRegistry registry = SceneObjectRegistry.Instance != null
+            ? SceneObjectRegistry.Instance
+            : FindObjectOfType<SceneObjectRegistry>(true);
+        return registry != null &&
+               registry.TryGet(step.targetId.Trim(), out SemanticObject semantic) &&
+               semantic != null
+            ? semantic.gameObject
+            : null;
+    }
 
     public GuidanceManager GuidanceManager
     {
@@ -187,16 +221,24 @@ public sealed class PreparationSequenceController : MonoBehaviour
     private void ShowCurrentStep()
     {
         Step step = CurrentStep;
-        if (step == null || step.target == null)
+        if (step == null)
         {
             Debug.LogError(
-                $"[Preparation] Step {_currentStepIndex} has no target.");
+                $"[Preparation] Step {_currentStepIndex} is missing.");
             return;
         }
 
-        if (showTargetAutomatically)
+        GameObject resolvedTarget = ResolveTarget(step);
+        if (resolvedTarget == null && step.requiresConfirmation)
         {
-            guidanceManager.ShowTarget(step.target);
+            Debug.LogError(
+                $"[Preparation] Step {_currentStepIndex} has no resolvable target.");
+            return;
+        }
+
+        if (showTargetAutomatically && resolvedTarget != null)
+        {
+            guidanceManager.ShowTarget(resolvedTarget);
         }
         else
         {
@@ -207,7 +249,7 @@ public sealed class PreparationSequenceController : MonoBehaviour
         StateChanged?.Invoke();
         Debug.Log(
             $"[Preparation] step={_currentStepIndex + 1}/{steps.Count} " +
-            $"id={step.id} target={step.target.name} " +
+            $"id={step.id} target={(resolvedTarget != null ? resolvedTarget.name : "-")} " +
             $"instruction=\"{step.instruction}\" " +
             $"time={Time.realtimeSinceStartupAsDouble:F6}");
     }

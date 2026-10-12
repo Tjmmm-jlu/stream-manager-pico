@@ -17,7 +17,12 @@ public static class CopperSulfateLiquidVerification
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
     public static void Run()
     {
-        string path = CopperSulfateLiquidInstaller.ScenePath;
+        RunForScene(CopperSulfateLiquidInstaller.ScenePath);
+    }
+
+    public static void RunForScene(string path, Action<Scene, List<string>> checkLayout = null,
+        string reportPath = "Temp/CopperSulfateLiquids.verification.txt")
+    {
         byte[] before = File.ReadAllBytes(path);
         string copy = "Assets/Editor/LiquidVerification_" + Guid.NewGuid().ToString("N") + ".unity";
         var active = SceneManager.GetActiveScene();
@@ -32,6 +37,7 @@ public static class CopperSulfateLiquidVerification
                 report.Add("PASS: " + name);
             }
             var roots = scene.GetRootGameObjects();
+            PicoPinchToggleVerification.EnableReturns(scene);
             var mix = roots.SelectMany(r => r.GetComponentsInChildren<CopperSulfateMixingDetector>(true)).Single();
             var sequence = mix.GetComponent<PreparationSequenceController>();
             var transfer = mix.GetComponent<CopperSulfateTransferDetector>();
@@ -39,6 +45,7 @@ public static class CopperSulfateLiquidVerification
             var state = mix.GetComponent<ExperimentStateController>();
             var pour = mix.GetComponent<LiquidPourInteractor>();
             var filtration = mix.GetComponent<CopperSulfateFiltrationDetector>();
+            var heating = mix.GetComponent<CopperSulfateHeatingDetector>();
             var calibration = roots.SelectMany(r => r.GetComponentsInChildren<PicoExperimentStartPose>()).Single();
             var floor = roots.Single(r => r.name == "floor (1)").GetComponent<Renderer>().bounds.max.y;
             foreach (string name in new[] { "PreparationStation", "MixingStation", "FilteringStation" })
@@ -58,11 +65,14 @@ public static class CopperSulfateLiquidVerification
             Render(scene, "Temp/CopperSulfateLiquids.measurement.png", mix.Cylinder.Mouth + new Vector3(0f, 0.03f, -0.35f), Quaternion.Euler(15f, 0f, 0f));
             Set(receiver, "_copperTransfer", transfer); Set(receiver, "_copperMixing", mix);
             Set(receiver, "_copperFiltration", filtration);
+            Set(receiver, "_copperHeating", heating);
             Set(receiver, "objectRegistry", null);
             Invoke(receiver, "OnEnable");
             mix.Tick(0f); transfer.EditorTick(0f, false);
             if (filtration != null) filtration.Tick(0f);
-            if (filtration != null) CopperSulfateFiltrationVerification.CheckLayout(scene, filtration, report);
+            if (heating != null) heating.Tick(0f);
+            if (checkLayout != null) checkLayout(scene, report);
+            else if (filtration != null) CopperSulfateFiltrationVerification.CheckLayout(scene, filtration, report);
             Check(mix.Source.GetComponent<SemanticObject>().Contents == "water" &&
                 mix.Cylinder.GetComponent<SemanticObject>().StateTags.Contains("empty"),
                 "Initial semantic catalog agrees with filled source and empty cylinder");
@@ -92,6 +102,7 @@ public static class CopperSulfateLiquidVerification
             void Release(XRDirectInteractor hand)
             {
                 foreach (var selected in hand.interactablesSelected.ToArray()) manager.SelectExit(hand, selected);
+                PicoPinchToggleVerification.FlushReturns(scene);
             }
             void Hold(XRDirectInteractor hand, XRGrabInteractable grab)
             {
@@ -193,8 +204,23 @@ public static class CopperSulfateLiquidVerification
             for (int i = 0; i < 50; i++) { MoveTip(StirPoint(i * 0.12f)); mix.Tick(0.02f); }
             Check(mix.Progress == 0f, "Rod-only stirring fails the two-hand requirement");
             Hold(right, mix.Beaker.Grab);
-            for (int i = 0; i < 350 && mix.Progress < 1f; i++) { MoveTip(StirPoint(i * 0.12f)); mix.Tick(0.02f); }
+            Vector3 CenterStroke(float angle) => mix.Beaker.transform.TransformPoint(mix.Beaker.Bottom +
+                new Vector3(Mathf.Sin(angle) * mix.Beaker.Radius * 0.4f, mix.Beaker.Height * 0.2f, 0f));
+            for (int i = 0; i < 50; i++) { MoveTip(CenterStroke(i * 0.12f)); mix.Tick(0.02f); }
+            Check(mix.Progress > 0f && mix.Progress < 1f, "Back-and-forth stirring through the cup center earns partial dissolution");
+            float partialProgress = mix.Progress;
+            MoveTip(mix.Beaker.Mouth + Vector3.up * 0.3f); Tick(1f);
+            Check(mix.Progress == partialProgress, "Lifting the rod pauses dissolution without losing progress");
+            MoveTip(CenterStroke(0f)); mix.Tick(0.02f);
+            Check(mix.Progress == partialProgress, "Re-entering liquid does not count the jump as stirring");
+            Command("retry_liquid_stage");
+            Hold(left, mix.Cylinder.Grab); Hold(right, mix.Beaker.Grab); Align(mix.Cylinder, mix.Beaker, 0f);
+            mix.Cylinder.SetVolume(0f); mix.Beaker.SetVolume(100f); Tick(0.6f); Hold(left, mix.Rod);
+            Check(mix.Progress == 0f && mix.Stage == CopperSulfateMixingDetector.MixingStage.Stirring,
+                "Retry clears partial stirring and restores the two-hand stirring stage");
+            for (int i = 0; i < 125 && mix.Progress < 1f; i++) { MoveTip(StirPoint(i * 0.12f)); mix.Tick(0.02f); }
             Check(mix.Progress == 1f && sequence.CurrentStepIndex == 3, "Relative circular stirring dissolves and advances exactly once");
+            report.Add("PASS: Normal circular stirring finishes within 2.5 simulated seconds");
             Check(mix.Beaker.GetComponent<SemanticObject>().Contents == "copper_sulfate_solution" &&
                 transfer.CrystalVisual.Cast<Transform>().All(t => t.localScale == Vector3.zero),
                 "Dissolution updates solution semantics and consumes blue crystals");
@@ -203,8 +229,14 @@ public static class CopperSulfateLiquidVerification
             Render(scene, "Temp/CopperSulfateLiquids.solution.png", mix.Beaker.Mouth + new Vector3(0f, 0.14f, -0.34f), Quaternion.Euler(32f, 0f, 0f));
             if (filtration != null) CopperSulfateFiltrationVerification.Run(scene, mix, manager, left, right, report);
             Command("reset_sequence");
+            if (heating != null)
+                Check(heating.Stage == CopperSulfateHeatingDetector.HeatingStage.Waiting && heating.Covered && !heating.Lit &&
+                    !heating.DishMounted && !heating.LampMounted && heating.EvaporatedMl == 0f &&
+                    heating.CoolingRemainingSeconds == 0f && !heating.Crystals.activeSelf,
+                    "Full reset restores capped lamp, heating mounts, evaporated volume and hidden crystals");
             if (filtration != null)
-                Check(filtration.Stage == CopperSulfateFiltrationDetector.FiltrationStage.Waiting && !filtration.Attached &&
+                Check(filtration.Stage == CopperSulfateFiltrationDetector.FiltrationStage.Waiting && !filtration.Attached && !filtration.ReceiverMounted &&
+                    filtration.Stand.enabled && filtration.Receiver.Grab.enabled &&
                     filtration.Funnel.enabled && filtration.Receiver.VolumeMl == 0f && filtration.Dish.VolumeMl == 0f &&
                     !filtration.TrappedResidue.gameObject.activeSelf && filtration.SpilledMl == 0f,
                     "Full reset restores the unassembled filter, empty receiving vessels and residue");
@@ -244,6 +276,21 @@ public static class CopperSulfateLiquidVerification
                 "The measured 99.8 mL pours into the opposite-hand beaker and enables stirring");
             Check(Mathf.Abs(mix.Source.VolumeMl + mix.Cylinder.VolumeMl + mix.Beaker.VolumeMl + mix.SpilledMl - 400f) < 0.02f,
                 "Swapping vessels conserves the 400 mL water supply");
+            Hold(left, mix.Rod);
+            mix.Rod.transform.rotation = Quaternion.Euler(0f, 0f, 180f);
+            Vector3 reverseLocalTip = -mix.Rod.transform.InverseTransformPoint(mix.RodTip.position);
+            void MoveReverseTip(Vector3 position) { mix.Rod.transform.position += position - mix.Rod.transform.TransformPoint(reverseLocalTip); }
+            MoveReverseTip(CenterStroke(0f)); Tick(1f);
+            Check(mix.Progress == 0f && !mix.Beaker.ContainsLiquidPoint(mix.RodTip.position) &&
+                mix.Beaker.ContainsLiquidPoint(mix.Rod.transform.TransformPoint(reverseLocalTip)),
+                "Reversed rod uses its submerged end and stays idle without motion");
+            for (int i = 0; i < 50; i++)
+            { MoveReverseTip(CenterStroke(0f) + Vector3.right * (i % 2 * 0.001f)); mix.Tick(0.02f); }
+            Check(mix.Progress == 0f, "Reversed-end tracking jitter cannot dissolve crystals");
+            for (int i = 0; i < 135 && mix.Progress < 1f; i++)
+            { MoveReverseTip(CenterStroke(i * 0.12f)); mix.Tick(0.02f); }
+            Check(mix.Progress == 1f && sequence.CurrentStepIndex == 3,
+                "Reversed rod with central back-and-forth strokes dissolves within 2.7 simulated seconds");
             Command("reset_sequence"); Command("start_sequence");
             transfer.Forceps.transform.position += transfer.Pickup.position - transfer.Tip.position;
             transfer.EditorTick(0.6f, true);
@@ -261,14 +308,14 @@ public static class CopperSulfateLiquidVerification
         {
             EditorSceneManager.CloseScene(scene, true); SceneManager.SetActiveScene(active); AssetDatabase.DeleteAsset(copy);
             report.Add(before.SequenceEqual(File.ReadAllBytes(path)) ? "PASS: Saved scene unchanged by verification" : "FAIL: Saved scene changed");
-            File.WriteAllLines("Temp/CopperSulfateLiquids.verification.txt", report);
+            File.WriteAllLines(reportPath, report);
         }
         Debug.Log("[CopperLiquids] Verification passed: " + report.Count);
     }
 
     private static void Set(object target, string field, object value) => target.GetType().GetField(field, Private).SetValue(target, value);
     private static void Invoke(object target, string method, params object[] args) => target.GetType().GetMethod(method, Private).Invoke(target, args);
-    internal static void Render(Scene scene, string path, Vector3 position, Quaternion rotation)
+    internal static void Render(Scene scene, string path, Vector3 position, Quaternion rotation, bool addInspectionLight = true)
     {
         var go = new GameObject("Liquid Inspection Camera"); SceneManager.MoveGameObjectToScene(go, scene);
         var camera = go.AddComponent<Camera>(); camera.enabled = false; camera.stereoTargetEye = StereoTargetEyeMask.None;
@@ -276,15 +323,21 @@ public static class CopperSulfateLiquidVerification
         camera.nearClipPlane = 0.02f; camera.farClipPlane = 10f;
         camera.clearFlags = CameraClearFlags.SolidColor; camera.backgroundColor = new Color(0.75f, 0.8f, 0.83f);
         var rt = new RenderTexture(1400, 1000, 24); var previous = RenderTexture.active;
-        var light = go.AddComponent<Light>(); light.type = LightType.Directional; light.intensity = 0.8f;
+        if (addInspectionLight)
+        {
+            var light = go.AddComponent<Light>(); light.type = LightType.Directional; light.intensity = 0.8f;
+        }
         var image = new Texture2D(1400, 1000, TextureFormat.RGB24, false);
+        var otherRenderers = UnityEngine.Object.FindObjectsOfType<Renderer>().Where(r => r.enabled && r.gameObject.scene != scene).ToArray();
         try
         {
+            foreach (var renderer in otherRenderers) renderer.enabled = false;
             camera.targetTexture = rt; camera.Render(); RenderTexture.active = rt;
             image.ReadPixels(new Rect(0, 0, 1400, 1000), 0, 0); image.Apply(); File.WriteAllBytes(path, image.EncodeToPNG());
         }
         finally
         {
+            foreach (var renderer in otherRenderers) if (renderer != null) renderer.enabled = true;
             RenderTexture.active = previous; camera.targetTexture = null; rt.Release();
             UnityEngine.Object.DestroyImmediate(image); UnityEngine.Object.DestroyImmediate(rt); UnityEngine.Object.DestroyImmediate(go);
         }

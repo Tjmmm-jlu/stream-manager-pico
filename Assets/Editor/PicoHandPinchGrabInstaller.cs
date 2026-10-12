@@ -156,8 +156,9 @@ public static class PicoHandPinchGrabInstaller
         interactor.physicsLayerMask = 1 << 0;
         interactor.physicsTriggerInteraction = QueryTriggerInteraction.Ignore;
         interactor.selectActionTrigger =
-            XRBaseInputInteractor.InputTriggerType.StateChange;
+            XRBaseInputInteractor.InputTriggerType.State;
         interactor.selectInput = CreatePinchInput(objectName, pinchInput);
+        pinchInput.BindInteractor(interactor);
         interactor.activateInput.inputSourceMode =
             XRInputButtonReader.InputSourceMode.Unused;
 

@@ -80,6 +80,7 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
     [Header("Runtime policy")]
     [Tooltip("Keep disabled for controlled experiments; generate explicitly before each trial.")]
     [SerializeField] private bool generateOnStart;
+    [SerializeField] private ExperimentPairedLayoutController pairedLayout;
 
     private ExperimentLayoutSelection _currentSelection =
         ExperimentLayoutSelection.Clear;
@@ -88,11 +89,13 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
     public Renderer PlacementSurface => placementSurface;
     public ExperimentLayoutRegion LayoutRegion => layoutRegion;
     public Vector2 AreaSize => areaSize;
-    public int RandomSeed => randomSeed;
-    public int GeneratedCount => GetComponentsInChildren<GeneratedDistractorMarker>(true)
+    public ExperimentPairedLayoutController PairedLayout => pairedLayout;
+    public void SetPairedLayout(ExperimentPairedLayoutController controller) => pairedLayout = controller;
+    public int RandomSeed => pairedLayout != null ? pairedLayout.LayoutSeed : randomSeed;
+    public int GeneratedCount => pairedLayout != null ? pairedLayout.ActiveCount : GetComponentsInChildren<GeneratedDistractorMarker>(true)
         .Count(marker => marker != null && marker.gameObject.activeInHierarchy);
     public IReadOnlyList<ExperimentDistractorDefinition> Definitions => definitions;
-    public ExperimentLayoutSelection CurrentSelection => _currentSelection;
+    public ExperimentLayoutSelection CurrentSelection => pairedLayout != null ? pairedLayout.Selection : _currentSelection;
 
     private void Start()
     {
@@ -152,6 +155,14 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
         string source = "runtime",
         int? seed = null)
     {
+        if (!TryApplySelection(selection, source, seed, out string error))
+            Debug.LogWarning("[DistractorLayout] " + error, this);
+    }
+
+    public bool TryApplySelection(ExperimentLayoutSelection selection, string source, int? seed, out string error)
+    {
+        if (pairedLayout != null) return pairedLayout.TryApply(selection, source, seed, out error);
+        error = null;
         int requestedSeed = seed ?? randomSeed;
         switch (selection)
         {
@@ -177,10 +188,16 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
         FindObjectOfType<ExperimentLogger>(true)?.LogEvent(
             "layout_changed", message);
         Debug.Log($"[DistractorLayout] {message}", this);
+        return true;
     }
 
     public void Generate(ExperimentLayoutComplexity requestedComplexity, int seed)
     {
+        if (pairedLayout != null)
+        {
+            ApplySelection((ExperimentLayoutSelection)requestedComplexity, "generate", seed);
+            return;
+        }
         if (placementArea == null)
         {
             Debug.LogError("[DistractorLayout] Placement area is not assigned.", this);
@@ -249,6 +266,11 @@ public sealed class ExperimentDistractorLayoutGenerator : MonoBehaviour
     [ContextMenu("Clear Generated Distractors")]
     public void ClearGenerated()
     {
+        if (pairedLayout != null)
+        {
+            Debug.LogWarning("[DistractorLayout] This paired scene supports low/high; use sequence reset to restore objects.", this);
+            return;
+        }
         GeneratedDistractorMarker[] markers =
             GetComponentsInChildren<GeneratedDistractorMarker>(true);
         foreach (GeneratedDistractorMarker marker in markers)

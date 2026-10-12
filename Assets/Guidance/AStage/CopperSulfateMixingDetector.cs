@@ -8,6 +8,7 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 public sealed class CopperSulfateMixingDetector : MonoBehaviour
 {
     public const string MeasureAction = "measure_water";
+    public const string PourWaterAction = "pour_water_into_beaker";
     public const string MixAction = "dissolve_copper_sulfate";
     public enum MixingStage { Waiting, Measuring, AddingWater, Stirring, Completed }
     [SerializeField] private PreparationSequenceController sequence;
@@ -22,7 +23,7 @@ public sealed class CopperSulfateMixingDetector : MonoBehaviour
     [SerializeField] private float targetMl = 100f;
     [SerializeField] private float toleranceMl = 10f;
     [SerializeField] private float settleSeconds = 0.5f;
-    [SerializeField] private float stirringSeconds = 4f;
+    [SerializeField, Min(0.1f)] private float stirringSeconds = 2f;
     private ExperimentLogger _logger;
     private ExperimentStateController _state;
     private Snapshot[] _initial;
@@ -31,8 +32,11 @@ public sealed class CopperSulfateMixingDetector : MonoBehaviour
     private float _settle;
     private float _stirTime;
     private float _motionWindow;
+    private float _windowTravel;
     private Vector3 _previousTip;
-    private Vector3 _windowTip;
+    private Vector3 _windowMinTip;
+    private Vector3 _windowMaxTip;
+    private bool _usingReverseTip;
     private bool _sampleValid;
     private bool _initialized;
     private float _notificationTime;
@@ -98,13 +102,16 @@ public sealed class CopperSulfateMixingDetector : MonoBehaviour
     {
         if (!Initialize() || !isActiveAndEnabled) return;
         float dt = Mathf.Clamp(elapsed, 0f, 0.1f);
-        if (!IsAction(MeasureAction) && !IsAction(MixAction))
+        bool inFamily = IsAction(MeasureAction) || IsAction(PourWaterAction) ||
+            IsAction(MixAction);
+        if (!inFamily)
         {
             pour.Stop(); _sampleValid = false; _settle = 0f;
             if (Stage != MixingStage.Completed) Stage = MixingStage.Waiting;
             Status = "idle";
             return;
         }
+        // 元步骤模式下：量取、倒水、搅拌溶解分属三个步骤。
         if (IsAction(MeasureAction)) Measure(dt); else Mix(dt);
         _notificationTime += dt;
         if (_notificationTime >= 0.2f) { _notificationTime = 0f; StateChanged?.Invoke(); }
@@ -152,37 +159,42 @@ public sealed class CopperSulfateMixingDetector : MonoBehaviour
             Stage = MixingStage.Stirring;
             Status = "stirring";
             _settle = 0f; _sampleValid = false;
+            sequence.CompleteAction(PourWaterAction);
             StateChanged?.Invoke();
             return;
         }
         pour.Stop();
         bool held = LiquidPourInteractor.OppositeHands(rod, beaker.Grab);
-        bool immersed = held && beaker.Upright && beaker.ContainsLiquidPoint(rodTip.position);
+        Vector3 tip = default;
+        bool immersed = held && beaker.Upright && TryGetStirringTip(out tip);
         Status = !held ? "two_hands" : !immersed ? "immerse_rod" : "stirring";
-        if (!immersed || !InRange(beaker.VolumeMl)) { _sampleValid = false; return; }
-        Vector3 localTip = beaker.transform.InverseTransformPoint(rodTip.position);
+        if (!immersed || !InRange(beaker.VolumeMl) || dt <= 0f) { _sampleValid = false; return; }
+        Vector3 localTip = beaker.transform.InverseTransformPoint(tip);
         if (!_sampleValid)
         {
-            _sampleValid = true; _windowTip = _previousTip = localTip; _motionWindow = 0f;
+            StartMotionWindow(localTip);
             return;
         }
-        float movement = beaker.transform.TransformVector(localTip - _previousTip).magnitude;
+        Vector3 step = localTip - _previousTip;
+        float movement = beaker.transform.TransformVector(step).magnitude;
         _previousTip = localTip;
         if (movement > 0.04f) { _sampleValid = false; return; }
+        step.y = 0f;
+        _windowTravel += beaker.transform.TransformVector(step).magnitude;
+        Vector3 planarTip = new Vector3(localTip.x, 0f, localTip.z);
+        _windowMinTip = Vector3.Min(_windowMinTip, planarTip);
+        _windowMaxTip = Vector3.Max(_windowMaxTip, planarTip);
         _motionWindow += dt;
         if (_motionWindow < 0.12f) return;
-        Vector3 displacement = beaker.transform.TransformVector(localTip - _windowTip);
-        Vector3 radial = Vector3.ProjectOnPlane(beaker.transform.TransformPoint(_windowTip) - beaker.Mouth, beaker.transform.up);
-        Vector3 tangent = Vector3.Cross(beaker.transform.up, radial).normalized;
-        float tangential = Mathf.Abs(Vector3.Dot(displacement, tangent));
-        // Relative motion rejects moving both hands together; a 4 mm window rejects tracking tremor.
-        if (radial.magnitude >= 0.008f && tangential >= 0.004f && tangential / _motionWindow < 0.7f)
+        float span = beaker.transform.TransformVector(_windowMaxTip - _windowMinTip).magnitude;
+        // Measure relative horizontal excursion: circles and returning strokes count, tiny tremor does not.
+        if (span >= 0.004f && _windowTravel / _motionWindow < 0.7f)
         {
             _stirTime += _motionWindow;
             _state?.MarkOperatorActing();
             ApplyDissolution();
         }
-        _windowTip = localTip; _motionWindow = 0f;
+        StartMotionWindow(localTip);
         if (_stirTime < stirringSeconds) return;
         Stage = MixingStage.Completed;
         Status = "dissolved";
@@ -190,6 +202,27 @@ public sealed class CopperSulfateMixingDetector : MonoBehaviour
         Log("copper_sulfate_dissolved", beaker.VolumeMl, beaker);
         sequence.CompleteAction(MixAction);
         StateChanged?.Invoke();
+    }
+
+    private bool TryGetStirringTip(out Vector3 tip)
+    {
+        Vector3 reverseTip = rod.transform.TransformPoint(-rod.transform.InverseTransformPoint(rodTip.position));
+        tip = _usingReverseTip ? reverseTip : rodTip.position;
+        if (beaker.ContainsLiquidPoint(tip)) return true;
+        tip = _usingReverseTip ? rodTip.position : reverseTip;
+        if (!beaker.ContainsLiquidPoint(tip)) return false;
+        _usingReverseTip = !_usingReverseTip;
+        // Changing ends starts a fresh sample so flipping the rod cannot add stirring motion.
+        _sampleValid = false;
+        return true;
+    }
+
+    private void StartMotionWindow(Vector3 localTip)
+    {
+        _sampleValid = true;
+        _previousTip = localTip;
+        _windowMinTip = _windowMaxTip = new Vector3(localTip.x, 0f, localTip.z);
+        _motionWindow = _windowTravel = 0f;
     }
 
     private bool InRange(float volume) => Mathf.Abs(volume - targetMl) <= toleranceMl;

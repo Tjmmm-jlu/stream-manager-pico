@@ -6,6 +6,7 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 [DisallowMultipleComponent]
 public sealed class CopperSulfateTransferDetector : MonoBehaviour
 {
+    public const string GrabAction = "grab_copper_sulfate";
     public const string ActionId = "transfer_copper_sulfate";
     public enum TransferStage { WaitingForPickup, Carrying, Completed }
 
@@ -52,7 +53,12 @@ public sealed class CopperSulfateTransferDetector : MonoBehaviour
     public SemanticObject Forceps => forceps;
     public SemanticObject Beaker => beaker;
     public bool IsActiveStep => sequence != null && sequence.IsRunning &&
-        sequence.CurrentStep?.completionAction == ActionId;
+        IsFamilyAction(sequence.CurrentStep?.completionAction);
+
+    // 元步骤模式下夹取与转移分属两个步骤，检测器在两段都保持活跃。
+    private static bool IsFamilyAction(string action) =>
+        string.Equals(action, GrabAction, StringComparison.Ordinal) ||
+        string.Equals(action, ActionId, StringComparison.Ordinal);
 
     public void Configure(PreparationSequenceController controller,
         SemanticObject tool, SemanticObject source, SemanticObject destination,
@@ -198,6 +204,7 @@ public sealed class CopperSulfateTransferDetector : MonoBehaviour
             reagent.ContentColor, reagent.StateTags.Where(tag => tag != "ready")
                 .Concat(new[] { "held_by_forceps" }), reagent.Aliases);
         logger?.LogEvent("copper_sulfate_grab_confirmed", null, reagent.StableId);
+        sequence.CompleteAction(GrabAction);
         StateChanged?.Invoke();
     }
 
